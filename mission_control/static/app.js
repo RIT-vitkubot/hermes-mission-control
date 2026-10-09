@@ -367,7 +367,9 @@
   }
 
   // ---------------------------------------------------------------- github
+  var lastGithub = null;
   function renderGithub(gh) {
+    lastGithub = gh;
     if (!gh.available) { setHTML($("repos"), '<li class="empty">' + esc(gh.reason || "nedostupné") + "</li>"); return; }
     if (gh.loading) { setHTML($("repos"), '<li class="empty loading">Načítám přes gh CLI…</li>'); setTimeout(pollGithub, 4000); return; }
     var now = Date.now() / 1000;
@@ -505,6 +507,7 @@
   Array.prototype.forEach.call(document.querySelectorAll("#usage-windows button"), function (b) {
     b.addEventListener("click", function () {
       usageWindow = b.getAttribute("data-w");
+      $("usage-export").innerHTML = exportLinks("kind=usage&window=" + usageWindow);
       Array.prototype.forEach.call(document.querySelectorAll("#usage-windows button"), function (x) { x.classList.toggle("active", x === b); });
       fetchUsage();
     });
@@ -664,7 +667,9 @@
     if (parts[0] === "agent" && parts[1]) return { view: "agent", profile: parts[1] };
     if (parts[0] === "cron" && parts[1] && parts[2]) return { view: "cron", profile: parts[1], job: parts.slice(2).join("/") };
     if (parts[0] === "help") return { view: "help" };
-    if (parts[0] === "incidents") return { view: "incidents", profile: q.profile || "", level: q.level || "", hours: q.hours || "24" };
+    if (parts[0] === "compare") return { view: "compare", sort: q.sort || "", dir: q.dir || "" };
+    if (parts[0] === "search") return { view: "search", q: q.q || "" };
+    if (parts[0] === "incidents") return { view: "incidents", profile: q.profile || "", level: q.level || "", hours: q.hours || "24", q: q.q || "" };
     return null;
   }
   function incidentsHash(r) {
@@ -672,6 +677,7 @@
     if (r.profile) q.push("profile=" + encodeURIComponent(r.profile));
     if (r.level) q.push("level=" + encodeURIComponent(r.level));
     if (r.hours && r.hours !== "24") q.push("hours=" + encodeURIComponent(r.hours));
+    if (r.q) q.push("q=" + encodeURIComponent(r.q));
     return "#/incidents" + (q.length ? "?" + q.join("&") : "");
   }
 
@@ -735,8 +741,9 @@
     if (r.view === "agent") return renderAgentDetail(r, current);
     if (r.view === "cron") return renderCronDetail(r, current);
     if (r.view === "help") return renderHelp();
+    if (r.view === "compare") return renderCompare(r, current);
+    if (r.view === "search") return whenState(function () { if (current()) renderSearch(r); });
     renderIncidentDetail(r, current);
-    if (focusSearchAfterRoute) { focusSearchAfterRoute = false; var q = $("d-inc-q"); if (q) q.focus(); }
   }
 
   function whenState(cb) {
@@ -1022,12 +1029,14 @@
       '<div class="seg" id="d-inc-hours" role="group" aria-label="období">' + [["24", "24h"], ["72", "3d"], ["168", "7d"]].map(function (h) {
         return '<button data-h="' + h[0] + '"' + (h[0] === r.hours ? ' class="active"' : "") + ">" + h[1] + "</button>";
       }).join("") + "</div>" +
-      '<input id="d-inc-q" type="search" placeholder="hledat ve zprávě…" aria-label="hledat"></div>' +
+      '<input id="d-inc-q" type="search" placeholder="hledat ve zprávě…" aria-label="hledat" value="' + esc(r.q || "") + '">' +
+      exportLinks("kind=incidents&hours=" + encodeURIComponent(r.hours) + (r.profile ? "&profile=" + encodeURIComponent(r.profile) : "") +
+        (r.level ? "&level=" + encodeURIComponent(r.level) : "")) + "</div>" +
       '<div class="inc-counts" id="d-inc-counts"></div>' +
       '<ul class="incidents incidents-full" id="d-inc-list"><li class="empty loading">Načítám…</li></ul>';
     $("modal-body").innerHTML = html;
     var nav = function (patch) {
-      var next = { profile: r.profile, level: r.level, hours: r.hours };
+      var next = { profile: r.profile, level: r.level, hours: r.hours, q: $("d-inc-q").value.trim() };
       Object.keys(patch).forEach(function (k) { next[k] = patch[k]; });
       history.replaceState(null, "", incidentsHash(next));
       route();
@@ -1053,7 +1062,10 @@
       }).join("") + '<span class="muted small">zobrazeno ' + Math.min(list.length, 500) + " z " + data.incidents.length +
         (data.incidents.length < data.total ? " (" + data.total + " bez filtru závažnosti)" : "") + "</span>";
     };
-    $("d-inc-q").addEventListener("input", renderList);
+    $("d-inc-q").addEventListener("input", function () {
+      renderList();
+      history.replaceState(null, "", incidentsHash({ profile: r.profile, level: r.level, hours: r.hours, q: this.value.trim() }));
+    });
     getJSONStrict("/api/incidents?hours=" + encodeURIComponent(r.hours) + (r.profile ? "&profile=" + encodeURIComponent(r.profile) : "") +
       (r.level ? "&level=" + encodeURIComponent(r.level) : "")).then(function (d) {
       if (!current()) return;
@@ -1061,27 +1073,213 @@
     }).catch(function (e) { if (current()) $("d-inc-list").innerHTML = '<li class="empty">⚠ ' + esc(e.message) + "</li>"; });
   }
 
+  // -- profile comparison ------------------------------------------------------
+  // Columns: [key, header, formatter, "worst" direction for highlighting]
+  // worst: "max" = highest value is the notable one, "min" = lowest is.
+  var COMPARE_COLS = [
+    ["health", "HP", function (v, r) { return healthBadge({ score: v, level: r.health_level, factors: [] }); }, "min"],
+    ["connected", "spojení", function (v) { return v === true ? '<span class="cell ok"></span>' : v === false ? '<span class="cell error"></span>' : '<span class="cell unknown"></span>'; }, null],
+    ["errors_24h", "chyby 24h", function (v, r) { return String(v + r.critical_24h) + (r.critical_24h ? ' <span class="muted">(' + r.critical_24h + " krit.)</span>" : ""); }, "max", function (r) { return r.errors_24h + r.critical_24h; }],
+    ["warnings_24h", "warningy 24h", String, "max"],
+    ["jobs_failing", "joby v chybě", function (v, r) { return v + ' <span class="muted">/ ' + r.jobs_total + "</span>"; }, "max"],
+    ["jobs_overdue", "po termínu", String, "max"],
+    ["max_streak", "nejdelší streak", function (v, r) { return v ? '<span class="streak">' + v + "×</span>" + (r.max_streak_job ? ' <span class="muted">' + esc(r.max_streak_job) + "</span>" : "") : "0"; }, "max"],
+    ["longest_run_seconds", "nejdelší běh cronu", function (v, r) { return v == null ? "–" : "~" + esc(fmtDur(v)) + ' <span class="muted">' + esc(r.longest_run_job || "") + "</span>"; }, "max"],
+    ["run_success_rate", "úspěšnost běhů", function (v) { return v == null ? "–" : Math.round(v * 100) + " %"; }, "min"],
+    ["tokens", "tokeny", function (v) { return v == null ? "–" : fmtNum(v); }, "max"],
+    ["cost_usd", "$", function (v) { return v == null ? "–" : "$" + v.toFixed(2); }, "max"],
+    ["processes", "procesy", function (v) { return v == null ? "N/A" : "~" + v; }, null]
+  ];
+  function colValue(col, r) { return col[4] ? col[4](r) : r[col[0]]; }
+  function exportLinks(query, label) {
+    return '<span class="export-links" title="Stáhnout data (read-only export)">' + (label ? esc(label) + " " : "") +
+      '<a class="link-more" href="/api/export?' + query + '&format=csv" download>⤓ CSV</a>' +
+      '<a class="link-more" href="/api/export?' + query + '&format=json" download>JSON</a></span>';
+  }
+  function renderCompare(r, current) {
+    setModalHead(crumbHome(), "Srovnání profilů");
+    bodyLoading("Načítám srovnání…");
+    getJSONStrict("/api/compare?days=14").then(function (d) {
+      if (!current()) return;
+      var sortKey = r.sort || "health", dir = r.dir === "desc" ? -1 : 1;
+      var extremes = {};
+      COMPARE_COLS.forEach(function (c) {
+        if (!c[3]) return;
+        var vals = d.rows.map(function (row) { return colValue(c, row); }).filter(function (v) { return v != null; });
+        if (!vals.length) return;
+        var best = c[3] === "max" ? Math.max.apply(null, vals) : Math.min.apply(null, vals);
+        // only highlight when it stands out (not all equal, not a harmless 0)
+        if (Math.min.apply(null, vals) !== Math.max.apply(null, vals) && !(c[3] === "max" && best === 0)) extremes[c[0]] = best;
+      });
+      var leader = function (key, fmt) {
+        var col = COMPARE_COLS.filter(function (c) { return c[0] === key; })[0];
+        if (extremes[key] == null) return null;
+        var hits = d.rows.filter(function (x) { return colValue(col, x) === extremes[key]; }), row = hits[0];
+        return '<a href="' + agentHref(row.profile) + '" style="color:' + (PROFILE_COLORS[row.profile] || "inherit") + '">' + esc(profileLabel(row.profile)) + "</a> " + fmt(row) +
+          (hits.length > 1 ? ' <span class="muted small">(+' + (hits.length - 1) + " se stejnou hodnotou)</span>" : "");
+      };
+      var facts = [
+        ["nejnižší HP", leader("health", function (x) { return x.health; })],
+        ["nejvíc chyb 24h", leader("errors_24h", function (x) { return x.errors_24h + x.critical_24h; })],
+        ["nejvíc tokenů (" + d.days + " d)", leader("tokens", function (x) { return fmtNum(x.tokens); })],
+        ["nejdelší běh cronu", leader("longest_run_seconds", function (x) { return "~" + esc(fmtDur(x.longest_run_seconds)) + ' <span class="muted">' + esc(x.longest_run_job) + "</span>"; })]
+      ].filter(function (f) { return f[1]; });
+      var draw = function () {
+        var col = COMPARE_COLS.filter(function (c) { return c[0] === sortKey; })[0] || COMPARE_COLS[0];
+        var rows = d.rows.slice().sort(function (a, b) {
+          var va = colValue(col, a), vb = colValue(col, b);
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          return (va > vb ? 1 : va < vb ? -1 : 0) * dir;
+        });
+        $("d-compare").innerHTML = "<thead><tr><th>profil</th>" + COMPARE_COLS.map(function (c) {
+          var on = c[0] === sortKey;
+          return '<th><button type="button" class="sort' + (on ? " on" : "") + '" data-k="' + c[0] + '" aria-sort="' + (on ? (dir > 0 ? "ascending" : "descending") : "none") + '">' +
+            esc(c[1]) + (on ? (dir > 0 ? " ▲" : " ▼") : "") + "</button></th>";
+        }).join("") + "</tr></thead><tbody>" + rows.map(function (row) {
+          return '<tr><th scope="row"><a href="' + agentHref(row.profile) + '" style="color:' + (PROFILE_COLORS[row.profile] || "inherit") + '">' + esc(profileLabel(row.profile)) + "</a></th>" +
+            COMPARE_COLS.map(function (c) {
+              var v = row[c[0]], hit = extremes[c[0]] != null && colValue(c, row) === extremes[c[0]];
+              return '<td class="' + (hit ? "extreme" : "") + '"' + (hit ? ' title="' + (c[3] === "max" ? "nejvíc" : "nejméně") + '"' : "") + ">" + c[2](v, row) + "</td>";
+            }).join("") + "</tr>";
+        }).join("") + "</tbody>";
+        history.replaceState(null, "", "#/compare" + (sortKey !== "health" || dir < 0 ? "?sort=" + sortKey + (dir < 0 ? "&dir=desc" : "") : ""));
+      };
+      $("modal-body").innerHTML =
+        (facts.length ? '<div class="compare-facts">' + facts.map(function (f) { return '<div class="fc"><div class="kpi-label">' + esc(f[0]) + '</div><div class="fc-fact">' + f[1] + "</div></div>"; }).join("") + "</div>" : "") +
+        '<div class="table-wrap compare-wrap"><table class="compare" id="d-compare"></table></div>' +
+        '<div class="panel-head compare-foot"><span class="muted small">Tokeny a $ za ' + d.days + " dní ze state.db, chyby/warningy z logů za 24 h, běhy = posledních až 12 běhů každého jobu (délka je odhad z času souboru). " +
+        'HP = 100 − penalizace (odpojení, padající / zpožděné joby, chyby v logu, sdílená kvóta). Zvýrazněná hodnota = nejvíc / nejméně ve sloupci.</span>' +
+        exportLinks("kind=compare&days=" + d.days) + "</div>";
+      $("d-compare").addEventListener("click", function (e) {
+        var b = e.target.closest ? e.target.closest("button.sort") : null;
+        if (!b) return;
+        var k = b.getAttribute("data-k");
+        if (k === sortKey) dir = -dir; else { sortKey = k; dir = COMPARE_COLS.filter(function (c) { return c[0] === k; })[0][3] === "min" ? 1 : -1; }
+        draw();
+      });
+      draw(); stamp();
+    }).catch(function (e) { if (current()) bodyError(e.message); });
+  }
+
+  // -- global search ------------------------------------------------------------
+  // Searches what the dashboard already loaded (agents, cron jobs, repos,
+  // today's incidents, panels and views) — no extra backend calls.
+  function fold(t) { return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+  var SEARCH_TYPES = { view: "pohled", panel: "panel", agent: "agent", cron: "cron job", repo: "GitHub", incident: "incident" };
+  function searchIndex() {
+    var st = window.__mcLastState || {}, items = [];
+    [["#/compare", "Srovnání profilů", "HP, chyby, tokeny, nejdelší cron vedle sebe", "compare porovnani health"],
+     ["#/incidents", "Plný log incidentů", "chyby + incidenty až 7 dní, filtry", "errors log chyby"],
+     ["#/help", "Klávesové zkratky", "nápověda", "help shortcuts"]].forEach(function (v) {
+      items.push({ type: "view", title: v[1], sub: v[2], href: v[0], extra: v[3] });
+    });
+    [["panel-usage", "Claude kvóta", "graf session / týden"], ["panel-gateway", "Gateway", "stav, PID, platformy, restarty"],
+     ["panel-agents", "Agenti", "karty profilů"], ["panel-incidents", "Co teď hoří", "chyby 24 h"],
+     ["panel-github", "GitHub repa", "push, otevřené PR"], ["panel-cron", "Cron úlohy", "všechny joby"],
+     ["panel-tokens", "Tokeny / náklady", "state.db, projekce měsíce"]].forEach(function (pn) {
+      items.push({ type: "panel", title: pn[1], sub: pn[2], panel: pn[0] });
+    });
+    (st.agents || []).forEach(function (a) {
+      items.push({ type: "agent", title: profileLabel(a.profile), sub: (a.connected === false ? "disconnected · " : "") + a.activity + (a.health ? " · HP " + a.health.score : ""),
+        href: agentHref(a.profile), extra: a.platforms.map(function (p) { return p.platform; }).join(" "), color: PROFILE_COLORS[a.profile] });
+    });
+    (st.cron || []).forEach(function (c) {
+      c.jobs.forEach(function (j) {
+        items.push({ type: "cron", title: j.name, sub: c.profile + " · " + (j.schedule || "") + " · " + j.status + (j.failure_streak ? " · " + j.failure_streak + "×" : ""),
+          href: jobHref(c.profile, j), extra: (j.id || "") + " " + c.profile, level: j.status === "error" ? "error" : "" });
+      });
+    });
+    ((lastGithub && lastGithub.repos) || []).forEach(function (r) {
+      items.push({ type: "repo", title: r.name, sub: (r.open_prs || []).length + " otevřených PR", url: r.url,
+        extra: (r.open_prs || []).map(function (p) { return "#" + p.number + " " + p.title; }).join(" ") });
+    });
+    (st.incidents || []).slice(0, 200).forEach(function (i) {
+      items.push({ type: "incident", title: i.message, sub: (i.profile || "") + " · " + i.level + " · " + (i.ts ? fmtDateTime(i.ts) : "bez času"),
+        href: incidentsHash({ profile: i.profile || "", hours: "24", q: i.message.slice(0, 60) }), extra: (i.details || []).join(" ") + " " + (i.source || ""), level: i.level });
+    });
+    return items;
+  }
+  function searchItems(q) {
+    var words = fold(q).split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    var order = Object.keys(SEARCH_TYPES);
+    return searchIndex().map(function (it) {
+      var title = fold(it.title), hay = title + " " + fold(it.sub) + " " + fold(it.extra);
+      if (!words.every(function (w) { return hay.indexOf(w) >= 0; })) return null;
+      it.rank = (title.indexOf(words[0]) === 0 ? 0 : title.indexOf(words[0]) > 0 ? 1 : 2) * 10 + order.indexOf(it.type);
+      return it;
+    }).filter(Boolean).sort(function (a, b) { return a.rank - b.rank; }).slice(0, 50);
+  }
+  function renderSearch(r) {
+    setModalHead(crumbHome(), "Hledání");
+    $("modal-body").innerHTML = '<div class="filters filters-bar"><input id="d-search-q" type="search" placeholder="agent, cron job, repo, chyba, panel…" aria-label="hledat na dashboardu" autocomplete="off" value="' + esc(r.q || "") + '"></div>' +
+      '<ul class="search-results" id="d-search-list" role="listbox"></ul>';
+    var sel = 0, results = [];
+    var draw = function () {
+      var q = $("d-search-q").value;
+      results = searchItems(q);
+      sel = Math.min(sel, Math.max(0, results.length - 1));
+      $("d-search-list").innerHTML = !q.trim() ? '<li class="empty muted">Piš pro hledání v agentech, cron jobech, repech, dnešních incidentech a panelech. <kbd>↑</kbd> <kbd>↓</kbd> výběr, <kbd>Enter</kbd> otevřít.</li>'
+        : results.length ? results.map(function (it, i) {
+          var href = it.href || it.url || "#";
+          return '<li role="option" aria-selected="' + (i === sel) + '" class="' + (i === sel ? "sel " : "") + esc(it.level || "") + '"><a href="' + esc(href) + '" data-i="' + i + '"' + (it.url ? ' target="_blank" rel="noopener"' : "") + ">" +
+            '<span class="sr-type">' + esc(SEARCH_TYPES[it.type]) + '</span><span class="sr-title"' + (it.color ? ' style="color:' + it.color + '"' : "") + ">" + esc(it.title) + "</span>" +
+            '<span class="sr-sub muted small">' + esc(it.sub) + "</span></a></li>";
+        }).join("") + '<li class="sr-more"><a href="' + incidentsHash({ hours: "168", q: q }) + '">hledat „' + esc(q) + '“ v plném logu incidentů (7 dní) ›</a></li>'
+        : '<li class="empty">Nic nenalezeno. <a href="' + incidentsHash({ hours: "168", q: q }) + '">Zkusit plný log incidentů (7 dní) ›</a></li>';
+      history.replaceState(null, "", "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""));
+    };
+    var open = function (it) {
+      if (!it) return;
+      if (it.panel) { closeModal(); setTimeout(function () { goPanel(it.panel); }, 80); return; }
+      if (it.url) { window.open(it.url, "_blank", "noopener"); return; }
+      modal.pendingPush = true; location.hash = it.href;
+    };
+    var input = $("d-search-q");
+    input.addEventListener("input", function () { sel = 0; draw(); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        sel = Math.max(0, Math.min(results.length - 1, sel + (e.key === "ArrowDown" ? 1 : -1)));
+        draw();
+        var cur = document.querySelector("#d-search-list li.sel");
+        if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter") { e.preventDefault(); open(results[sel]); }
+    });
+    $("d-search-list").addEventListener("click", function (e) {
+      var a = e.target.closest ? e.target.closest("a[data-i]") : null;
+      if (!a) return;
+      var it = results[+a.getAttribute("data-i")];
+      if (it && it.panel) { e.preventDefault(); open(it); }
+    });
+    draw();
+    input.focus();
+    var v = input.value; input.value = ""; input.value = v; // caret to the end
+  }
+
   // -- keyboard shortcuts -------------------------------------------------------
   var SHORTCUTS = [
     ["?", "tahle nápověda"],
-    ["/", "hledat — v otevřeném detailu, jinak otevře plný log incidentů"],
+    ["/", "hledat na celém dashboardu (v detailu s vlastním hledáním: hledat v něm)"],
     ["g a", "agenti"], ["g s", "gateway"], ["g u", "Claude kvóta"], ["g i", "co teď hoří"],
     ["g c", "cron úlohy"], ["g t", "tokeny / náklady"], ["g r", "GitHub repa"], ["g g", "nahoru (BMO)"],
-    ["g l", "plný log incidentů"],
+    ["g l", "plný log incidentů"], ["g p", "srovnání profilů"],
     ["1 – 5", "okno grafu kvóty 6h / 24h / 7d / 30d / vše"],
     ["$", "přepnout tokeny ↔ $"],
     ["r", "načíst data hned (v detailu: obnovit detail)"],
     ["Esc", "zavřít detail / opustit pole"]
   ];
   var GO = { a: "panel-agents", s: "panel-gateway", u: "panel-usage", i: "panel-incidents", c: "panel-cron", t: "panel-tokens", r: "panel-github", g: "top" };
-  var focusSearchAfterRoute = false, gPending = 0;
+  var gPending = 0;
 
   function renderHelp() {
     setModalHead(crumbHome(), "Klávesové zkratky");
     $("modal-body").innerHTML = '<table class="keys">' + SHORTCUTS.map(function (k) {
       return "<tr><td>" + k[0].split(" ").map(function (x) { return x === "–" ? "–" : "<kbd>" + esc(x) + "</kbd>"; }).join(" ") + "</td><td>" + esc(k[1]) + "</td></tr>";
     }).join("") + "</table>" +
-      '<p class="muted small">Zkratky nefungují, když píšeš do pole (kromě <kbd>Esc</kbd>). Detailní pohledy mají sdílitelné URL (<code>#/agent/…</code>, <code>#/cron/…</code>, <code>#/incidents…</code>, <code>#/help</code>).</p>';
+      '<p class="muted small">Zkratky nefungují, když píšeš do pole (kromě <kbd>Esc</kbd>). Detailní pohledy mají sdílitelné URL (<code>#/agent/…</code>, <code>#/cron/…</code>, <code>#/incidents…</code>, <code>#/compare</code>, <code>#/search?q=…</code>, <code>#/help</code>).</p>';
   }
   function navigate(hash) {
     if (location.hash === hash) { route(); return; }
@@ -1117,6 +1315,7 @@
     if (gPending) {
       gPending = 0; showKeyHint("");
       if (k === "l") { e.preventDefault(); navigate("#/incidents"); return; }
+      if (k === "p") { e.preventDefault(); navigate("#/compare"); return; }
       if (GO[k]) { e.preventDefault(); goPanel(GO[k]); }
       return;
     }
@@ -1124,9 +1323,9 @@
     if (k === "?") { e.preventDefault(); if (modal.route && modal.route.view === "help") closeModal(); else navigate("#/help"); return; }
     if (k === "/") {
       e.preventDefault();
-      var box = modal.open && (document.getElementById("d-inc-q") || document.getElementById("d-log-q"));
+      var box = modal.open && (document.getElementById("d-search-q") || document.getElementById("d-inc-q") || document.getElementById("d-log-q"));
       if (box) { box.focus(); return; }
-      focusSearchAfterRoute = true; navigate("#/incidents");
+      navigate("#/search");
       return;
     }
     if (k === "r") { e.preventDefault(); if (modal.open) route(); else pollAll(); return; }
@@ -1141,6 +1340,7 @@
     }
   });
   $("help-btn").addEventListener("click", function () { navigate("#/help"); });
+  $("search-btn").addEventListener("click", function () { navigate("#/search"); });
 
   // -- wiring -----------------------------------------------------------------
   document.addEventListener("click", function (e) {
@@ -1212,6 +1412,9 @@
   });
   function pollAll() { pollState(); pollUsage(); pollGithub(); pollTokens(); }
   document.addEventListener("visibilitychange", function () { if (!document.hidden) pollAll(); });
+  $("usage-export").innerHTML = exportLinks("kind=usage&window=" + usageWindow);
+  $("token-export").innerHTML = exportLinks("kind=tokens&days=14");
+  $("inc-export").innerHTML = exportLinks("kind=incidents&hours=24");
   drawUsage(null); drawTokens(null);
   pollAll(); tickClock(); tickUpdated();
   route();
