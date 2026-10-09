@@ -60,6 +60,23 @@ Pro `default` je `<home>` = `~/.hermes`, pro ostatní profily
 | Tokeny / $ per profil (14 dní) | `<home>/state.db` — `session_model_usage` JOIN `sessions`, otevřeno `mode=ro` |
 | BMO + speech bubble | agregace všeho výše (`summary` v `/api/state`) |
 
+### Detailní náhledy (modaly)
+
+Klikatelné detaily běží čistě na klientovi (hash routing, žádný nový stav na
+backendu, jen čtecí GET endpointy výše). Odkazy jdou sdílet / bookmarkovat:
+
+| URL | obsah |
+|-----|-------|
+| `#/agent/<profil>` | stav profilu, platformy, procesy, jeho cron joby, graf tokenů/$ jen za profil (30 dní), incidenty 7 dní, `agent.log` tail (100/300/1000 řádků, filtr závažnosti, hledání) |
+| `#/cron/<profil>/<job>` | detail jobu, úspěšnost, medián intervalu, pruh posledních běhů, historie běhů s výstupem (filtr „jen chyby“) |
+| `#/incidents?profile=&level=&hours=` | plný log chyb/incidentů s filtrem profilu, závažnosti, období (24h/3d/7d) a fulltextem |
+
+Do detailů se jde kliknutím na jméno agenta / „detail profilu ›“, jméno cron
+jobu, „plný log ›“ v panelu incidentů nebo profil u incidentu. Zavření: `Esc`,
+✕, klik mimo okno nebo „dashboard“ v drobečkové navigaci; tlačítko ⟳ data
+znovu načte. Stav běhu z `cron/output` je odhad z obsahu výstupu
+(`(FAILED)` v nadpisu / sekce `## Error`).
+
 **Počet sub-agentů:** na hostu neexistuje zdroj pravdy pro živé sub-agenty.
 Dashboard ukazuje jen *odhad* — počet potomků procesu gateway (rekurzivně
 přes `/proc`), přiřazený k profilu podle `-p <profil>` / `profiles/<profil>/`
@@ -78,6 +95,9 @@ HTTP požadavky nikdy nečekají na pomalé CLI.
 | `GET /api/usage?window=6h\|24h\|7d\|30d\|all` | historie kvóty (downsamplováno na ≤ 1500 bodů se zachováním špiček) |
 | `GET /api/tokens?days=14` | tokeny/náklady per profil a den |
 | `GET /api/github` | stav repozitářů (cache 5 min) |
+| `GET /api/agent-log?profile=P&lines=300` | delší tail `agent.log` (max 2000 řádků) pro detail profilu |
+| `GET /api/cron/runs?profile=P&job=ID\|jméno&limit=50` | historie běhů jobu z `<home>/cron/output/<job_id>/*.md` (fallback: poslední běh z `jobs.json`) |
+| `GET /api/incidents?profile=P&level=warning\|error\|critical&hours=24..168` | chyby + incidenty až 7 dní zpět, filtr profilu a minimální závažnosti |
 | `POST /api/restart` | `hermes gateway restart`, vrací `{ok, returncode, stdout, stderr, duration}` |
 
 ## Struktura
