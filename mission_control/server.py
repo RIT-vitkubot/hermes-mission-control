@@ -13,6 +13,7 @@ Endpoints::
     GET  /api/cron/runs?profile=&job=&limit= run history of one cron job
     GET  /api/incidents?profile=&level=&hours= incidents up to 7 days back
     GET  /api/compare?days=  profiles side by side (health, cron, incidents, tokens)
+    GET  /api/timeline?hours=6|24|72  all profiles on one time axis (runs, incidents, gateway down)
     GET  /api/export?kind=usage|tokens|incidents|compare&format=csv|json
                             download of data the dashboard shows
     POST /api/restart       runs `hermes gateway restart` (no auth, by design)
@@ -169,6 +170,11 @@ def make_handler(collector):
                         return self._json({"error": "unknown level"}, 400)
                     return self._json(collector.incidents_detail(
                         profile, level, int_param(qs, "hours", 24, 1, 168), int_param(qs, "limit", 1000, 1, 5000)))
+                if path == "/api/timeline":
+                    hours = int_param(qs, "hours", 24, 1, 72)
+                    if hours not in parsing.TIMELINE_HOURS:
+                        return self._json({"error": "hours must be one of 6|24|72"}, 400)
+                    return self._json(collector.timeline(hours))
                 if path == "/api/compare":
                     return self._json(collector.compare(int_param(qs, "days", 14, 1, 90)))
                 if path == "/api/export":

@@ -496,3 +496,50 @@ class Round4Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TimelineTest(unittest.TestCase):
+    def test_build_timeline_worst_state_per_bucket(self):
+        runs = {"skola": [
+            {"job": "a", "ts": 0, "duration": 1200, "status": "ok"},      # buckets 0..2
+            {"job": "b", "ts": 900, "duration": None, "status": "error"},  # bucket 2, error wins
+            {"job": "c", "ts": -9000, "duration": 60, "status": "error"},  # ended before start
+            {"job": "d", "ts": 99999, "duration": 5, "status": "ok"},      # after end
+        ]}
+        incidents = [
+            {"profile": "skola", "ts": 3000, "level": "warning"},
+            {"profile": "skola", "ts": 3100, "level": "critical"},
+            {"profile": "skola", "ts": 3200, "level": "info"},
+            {"profile": "editor", "ts": 100, "level": "error"},
+            {"profile": "skola", "ts": None, "level": "error"},
+        ]
+        tl = parsing.build_timeline(["skola", "editor"], runs, incidents, 0, 3600, buckets=8)
+        self.assertEqual(tl["bucket_seconds"], 450)
+        sk, ed = tl["profiles"]
+        self.assertEqual(sk["buckets"], ["ok", "ok", "error", "none", "none", "none", "critical", "none"])
+        self.assertEqual(sk["runs"], 2)
+        self.assertEqual([r["job"] for r in sk["failed"]], ["b"])
+        self.assertEqual(sk["incidents"], {"warning": 1, "error": 0, "critical": 1})
+        self.assertEqual(ed["buckets"][0], "error")
+        self.assertEqual(ed["runs"], 0)
+
+    def test_run_overlapping_window_start(self):
+        runs = {"p": [{"job": "x", "ts": -100, "duration": 400, "status": "ok"}]}
+        tl = parsing.build_timeline(["p"], runs, [], 0, 800, buckets=4)
+        self.assertEqual(tl["profiles"][0]["buckets"], ["ok", "ok", "none", "none"])
+
+    def test_gateway_down_intervals(self):
+        ev = [{"kind": "up", "ts": 50}, {"kind": "down", "ts": 10}, {"kind": "down", "ts": 80},
+              {"kind": "restart", "ts": 90}, {"kind": "api_restart", "ts": 95, "ok": False}]
+        self.assertEqual(parsing.gateway_down_intervals(ev, 0, 100), [
+            {"start": 10, "end": 50, "open": False}, {"start": 80, "end": 90, "open": False}])
+        # down now: open interval until the end
+        self.assertEqual(parsing.gateway_down_intervals([{"kind": "down", "ts": 60}], 0, 100, running=False),
+                         [{"start": 60, "end": 100, "open": True}])
+        # dashboard started while down: from last heartbeat, clipped to window
+        self.assertEqual(parsing.gateway_down_intervals([], 0, 100, running=False, down_since=-50),
+                         [{"start": 0, "end": 100, "open": True}])
+        self.assertEqual(parsing.gateway_down_intervals([], 0, 100, running=False),
+                         [{"start": 0, "end": 100, "open": True}])
+        # outside the window -> dropped
+        self.assertEqual(parsing.gateway_down_intervals([{"kind": "down", "ts": -90}, {"kind": "up", "ts": -10}], 0, 100), [])

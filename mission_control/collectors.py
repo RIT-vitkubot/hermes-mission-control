@@ -385,6 +385,30 @@ class Collector(object):
 
         return self.cache.get("cron-recent:%s:%d" % (profile, n), 60, load)
 
+    def cron_runs_since(self, profile, since, per_job=500):
+        """All runs of all jobs of ``profile`` since ``since`` (timeline).
+
+        Same cheap read as the sparklines (first 4 KiB per file), cached 60 s.
+        """
+        def load():
+            out = []
+            for job in self.cron(profile).get("jobs", []):
+                source, entries = self._job_run_files(profile, job)
+                if source is None:
+                    if job.get("last_run_at"):
+                        out.append(dict(self._fallback_run(job), job=job["name"], job_id=job.get("id")))
+                    continue
+                for ts, f, path, mtime in entries[:per_job]:
+                    if ts < since - parsing.MAX_RUN_SECONDS:
+                        break  # entries are newest first
+                    run = parsing.parse_cron_run(f, read_head(path, 4096), mtime=mtime)
+                    out.append({"job": job["name"], "job_id": job.get("id"), "ts": run["ts"],
+                                "duration": run["duration"], "status": run["status"]})
+            return out
+
+        # bucket the cache key per minute so a moving window still hits it
+        return self.cache.get("cron-since:%s:%d" % (profile, int(since // 60)), 60, load)
+
     # -- 5. errors / incidents -------------------------------------------
     def error_log(self, profile, since):
         home = self.cfg.profile_home(profile)
@@ -635,6 +659,22 @@ class Collector(object):
             "restarts": self.restart_events(10),
         }
 
+
+    # -- timeline -----------------------------------------------------------
+    def timeline(self, hours=24):
+        """All profiles on one time axis: cron runs, incidents, gateway down."""
+        now = time.time()
+        start = now - hours * 3600
+        runs = {p: self.cron_runs_since(p, start) for p in self.cfg.profiles}
+        incidents = self.incidents_detail(hours=hours, limit=None)["incidents"]
+        out = parsing.build_timeline(self.cfg.profiles, runs, incidents, start, now)
+        gw = self.gateway()
+        out["gateway_down"] = parsing.gateway_down_intervals(
+            self.restart_events(limit=1000), start, now,
+            running=bool(gw.get("running")) or not gw.get("available"),
+            down_since=gw.get("updated_at"))
+        out.update({"now": now, "hours": hours, "tz": host_tz()})
+        return out
 
     # -- comparison across profiles ----------------------------------------
     def compare(self, days=14):

@@ -54,6 +54,17 @@ class DetailEndpointsTest(unittest.TestCase):
         except HTTPError as e:
             return e.code, json.loads(e.read())
 
+    def test_timeline(self):
+        code, body = self.get("/api/timeline?hours=24")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["hours"], 24)
+        self.assertEqual(len(body["profiles"]), 6)
+        self.assertTrue(all(len(p["buckets"]) == 96 for p in body["profiles"]))
+        self.assertTrue(any(p["runs"] for p in body["profiles"]))
+        self.assertIn("gateway_down", body)
+        code, body = self.get("/api/timeline?hours=5")
+        self.assertEqual(code, 400)
+
     def test_endpoints(self):
         code, body = self.get("/api/agent-log?profile=skola&lines=20")
         self.assertEqual((code, len(body["lines"])), (200, 20))
@@ -122,3 +133,4 @@ class DetailEndpointsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
