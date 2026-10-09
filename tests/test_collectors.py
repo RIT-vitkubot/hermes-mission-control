@@ -83,5 +83,41 @@ class CollectorTest(unittest.TestCase):
         self.assertTrue(tail.endswith("\n"))
 
 
+    def test_agent_log_detail(self):
+        d = self.c.agent_log_detail("editor", 50)
+        self.assertTrue(d["available"])
+        self.assertEqual(len(d["lines"]), 50)
+        self.assertIn("handled message 119", d["lines"][-1])
+        self.assertEqual(len(self.c.agent_log_detail("editor", 1000)["lines"]), 120)
+
+    def test_cron_runs(self):
+        r = self.c.cron_runs("skola", "skola-sync")
+        self.assertTrue(r["found"])
+        self.assertEqual(r["source"], "cron/output/skola-sync")
+        self.assertEqual(r["count"], 30)
+        # newest first; demo failure_streak=3 -> three newest runs failed
+        self.assertEqual([x["status"] for x in r["runs"][:4]], ["error", "error", "error", "ok"])
+        self.assertAlmostEqual(r["median_interval"], 1800, delta=2)
+        # lookup by name works too, limit is honoured
+        self.assertEqual(self.c.cron_runs("skola", "inbox-sync", limit=5)["count"], 5)
+        self.assertFalse(self.c.cron_runs("skola", "../../etc")["found"])
+
+    def test_cron_runs_fallback_to_jobs_json(self):
+        r = self.c.cron_runs("default", "legacy-cleanup")
+        self.assertEqual(r["source"], "cron/jobs.json")
+        self.assertEqual(r["count"], 1)
+
+    def test_incidents_detail(self):
+        day = self.c.incidents_detail(hours=24)
+        week = self.c.incidents_detail(hours=168)
+        self.assertGreater(week["total"], day["total"])
+        self.assertTrue(any("outside 24h" in i["message"] for i in week["incidents"]))
+        only = self.c.incidents_detail(profile="obchodnik", hours=168)
+        self.assertTrue(only["incidents"])
+        self.assertTrue(all(i["profile"] == "obchodnik" for i in only["incidents"]))
+        errs = self.c.incidents_detail(min_level="error", hours=168)
+        self.assertFalse(any(i["level"] == "warning" for i in errs["incidents"]))
+        self.assertIn("warning", errs["counts"])  # counts are before the level filter
+
 if __name__ == "__main__":
     unittest.main()

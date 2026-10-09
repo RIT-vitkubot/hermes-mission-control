@@ -16,6 +16,7 @@
     <div class="brand">
       <span class="brand-dot"></span>
       <span class="brand-title">HERMES<span class="thin">//</span>MISSION CONTROL</span>
+      <span class="brand-short">HMC</span>
     </div>
     <div class="topbar-mid">
       <span id="overall-pill" class="pill pill-unknown">…</span>
@@ -24,7 +25,7 @@
     <div class="topbar-right">
       <span id="clock" class="mono"></span>
       <span id="conn" class="conn" title="spojení s backendem"></span>
-      <button id="restart-btn" class="btn btn-danger" type="button">⟲ Restart Hermes gateway</button>
+      <button id="restart-btn" class="btn btn-danger" type="button" title="Restart Hermes gateway">⟲ <span class="btn-label-full">Restart Hermes gateway</span><span class="btn-label-short">Restart</span></button>
     </div>
   </header>
 
@@ -76,22 +77,23 @@
         <header class="panel-head"><h3>Agenti</h3>
           <span class="muted small" title="Odhad podle child procesů gateway PID (rekurzivně), ne přesný počet sub-agentů. Na hostu neexistuje zdroj pravdy pro živé sub-agenty.">procesy = odhad ⓘ</span>
         </header>
-        <div class="agents" id="agents"></div>
+        <div class="agents" id="agents"><div class="empty loading">Načítám agenty…</div></div>
       </article>
 
       <article class="panel glass span-2" id="panel-incidents">
-        <header class="panel-head"><h3>Co teď hoří <span class="muted small">(24h)</span></h3><span id="inc-count" class="pill pill-unknown">0</span></header>
-        <ul class="incidents" id="incidents"></ul>
+        <header class="panel-head"><h3>Co teď hoří <span class="muted small">(24h)</span></h3>
+          <span class="head-actions"><a class="link-more" href="#/incidents">plný log ›</a><span id="inc-count" class="pill pill-unknown">0</span></span></header>
+        <ul class="incidents" id="incidents"><li class="empty loading">Načítám…</li></ul>
       </article>
 
       <article class="panel glass" id="panel-github">
         <header class="panel-head"><h3>GitHub repa</h3><span class="muted small" id="gh-meta"></span></header>
-        <ul class="repos" id="repos"></ul>
+        <ul class="repos" id="repos"><li class="empty loading">Načítám…</li></ul>
       </article>
 
       <article class="panel glass span-3" id="panel-cron">
         <header class="panel-head"><h3>Cron úlohy</h3><span class="muted small" id="cron-meta"></span></header>
-        <div class="cron" id="cron"></div>
+        <div class="cron" id="cron"><div class="empty loading">Načítám cron joby…</div></div>
       </article>
 
       <article class="panel glass span-3" id="panel-tokens">
@@ -104,6 +106,24 @@
       </article>
     </section>
   </main>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box glass">
+      <header class="modal-head">
+        <div class="modal-titles">
+          <div class="modal-crumb muted small" id="modal-crumb"></div>
+          <h2 id="modal-title">Detail</h2>
+        </div>
+        <div class="modal-actions">
+          <span class="muted small" id="modal-stamp"></span>
+          <button class="btn btn-sm" type="button" id="modal-refresh" title="Znovu načíst data">⟳</button>
+          <button class="btn btn-sm" type="button" data-close aria-label="Zavřít (Esc)" title="Zavřít (Esc)">✕</button>
+        </div>
+      </header>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
 
   <footer class="foot muted small">
     Hermes Mission Control — čistě čtecí vrstva nad lokálními soubory / SQLite / CLI. Nevolá žádné LLM API.

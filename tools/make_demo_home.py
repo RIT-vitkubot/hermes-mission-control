@@ -80,8 +80,26 @@ def build(root, now=None, broken=True):
         with open(os.path.join(home, "cron", "jobs.json"), "w") as fh:
             json.dump(jobs, fh, indent=2)
         with open(os.path.join(home, "agent.log"), "w") as fh:
-            for k in range(12):
-                fh.write("%s INFO agent: handled message %d\n" % (iso(now - 300 * (12 - k)), k))
+            for k in range(120):
+                level = "WARNING" if k % 17 == 5 else ("ERROR" if k % 41 == 7 else "INFO")
+                fh.write("%s %s agent: handled message %d\n" % (iso(now - 300 * (120 - k)), level, k))
+        # cron run history: <home>/cron/output/<job_id>/<YYYY-mm-dd_HH-MM-SS>.md
+        for job, step, count in ((jobs[0], 86400, 10), (jobs[1], 1800, 30)):
+            out_dir = os.path.join(home, "cron", "output", job["id"])
+            os.makedirs(out_dir, exist_ok=True)
+            last = datetime.fromisoformat(job["last_run_at"].replace("Z", "+00:00")).timestamp()
+            streak = job["failure_streak"]
+            for r in range(count):
+                t = last - r * step
+                failed = r < streak or (r % 11 == 4)
+                name = datetime.fromtimestamp(t).strftime("%Y-%m-%d_%H-%M-%S") + ".md"
+                with open(os.path.join(out_dir, name), "w") as fh:
+                    fh.write("# Cron Job: %s%s\n\n**Job ID:** %s\n**Schedule:** %s\n\n## Prompt\n\nDo the %s thing.\n\n"
+                             % (job["name"], " (FAILED)" if failed else "", job["id"], job["schedule_display"], job["name"]))
+                    if failed:
+                        fh.write("## Error\n\nTimeoutError: upstream did not respond\n")
+                    else:
+                        fh.write("## Response\n\nDone. Processed %d items for %s.\n" % (r * 3 + 1, p))
         if broken and p in ("default", "obchodnik"):
             with open(os.path.join(home, "logs", "errors.log"), "w") as fh:
                 fh.write("%s ERROR gateway: telegram poll failed\nTraceback (most recent call last):\n"

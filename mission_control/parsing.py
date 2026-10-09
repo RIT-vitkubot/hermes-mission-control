@@ -580,7 +580,90 @@ def merge_incidents(*groups, limit=200):
     for g in groups:
         merged.extend(g or [])
     merged.sort(key=lambda e: (e["ts"] or 0, SEVERITY_ORDER.get(e["level"], 0)), reverse=True)
-    return merged[:limit]
+    return merged[:limit] if limit else merged
+
+
+def filter_incidents(entries, profile=None, min_level=None, since=None, limit=None):
+    """Filter incident entries by profile, minimum severity and age.
+
+    ``min_level`` is one of SEVERITY_ORDER's keys; ``since`` is epoch seconds
+    (entries without a timestamp are always kept, like in the main panel).
+    """
+    floor = SEVERITY_ORDER.get(min_level, 0) if min_level else 0
+    out = [e for e in entries
+           if (profile is None or e.get("profile") == profile)
+           and SEVERITY_ORDER.get(e.get("level"), 0) >= floor
+           and (since is None or e.get("ts") is None or e["ts"] >= since)]
+    return out[:limit] if limit else out
+
+
+def count_levels(entries):
+    """``{level: count}`` for a list of incident entries."""
+    counts = {}
+    for e in entries:
+        counts[e.get("level")] = counts.get(e.get("level"), 0) + 1
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# 4b. Cron run history (``cron/output/<job_id>/<timestamp>.md``)
+# ---------------------------------------------------------------------------
+
+_RUN_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[_T ](\d{2})[-:](\d{2})[-:](\d{2})")
+_RUN_FAIL_RE = re.compile(r"^#+\s*(?:error|failed|failure|traceback)\b|\((?:failed|error)\)\s*$|"
+                          r"^\*\*status:?\*\*:?\s*(?:error|failed)|^status:\s*(?:error|failed)",
+                          re.I | re.M)
+_RUN_SECTION_RE = re.compile(r"^#+\s*(response|output|result|error)\b.*$", re.I | re.M)
+
+
+def run_ts_from_name(name):
+    """``2026-10-08_07-00-03.md`` -> epoch seconds (host-local), else None."""
+    m = _RUN_NAME_RE.match(name)
+    if not m:
+        return None
+    return parse_ts("%sT%s:%s:%s" % m.groups())
+
+
+def parse_cron_run(name, text, mtime=None, preview_chars=600):
+    """Summarize one cron output file.
+
+    Status is a best-effort guess from the markdown Hermes writes: a heading
+    like ``# Cron Job: x (FAILED)`` or ``## Error`` means the run failed.
+    """
+    ts = run_ts_from_name(name)
+    if ts is None:
+        ts = mtime
+    text = text or ""
+    head = text[:4000]
+    status = "error" if _RUN_FAIL_RE.search(head) else "ok"
+    m = _RUN_SECTION_RE.search(text)
+    body = text[m.end():] if m else text
+    preview = body.strip()[:preview_chars]
+    return {"file": name, "ts": ts, "status": status, "size": len(text.encode("utf-8")),
+            "preview": preview, "truncated": len(body.strip()) > preview_chars}
+
+
+def run_history(runs, limit=50):
+    """Sort run summaries newest first and compute aggregate stats."""
+    runs = sorted(runs, key=lambda r: r["ts"] or 0, reverse=True)[:limit]
+    ok = len([r for r in runs if r["status"] == "ok"])
+    gaps = [a["ts"] - b["ts"] for a, b in zip(runs, runs[1:]) if a["ts"] and b["ts"]]
+    return {
+        "runs": runs,
+        "count": len(runs),
+        "ok": ok,
+        "failed": len(runs) - ok,
+        "success_rate": (ok / float(len(runs))) if runs else None,
+        "median_interval": sorted(gaps)[len(gaps) // 2] if gaps else None,
+    }
+
+
+def find_job(summary, key):
+    """Find a normalized job in a :func:`summarize_jobs` result by id or name."""
+    for job in summary.get("jobs", []):
+        if key is not None and (str(job.get("id")) == str(key) or job.get("name") == key):
+            return job
+    return None
 
 
 # ---------------------------------------------------------------------------
