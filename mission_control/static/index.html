@@ -4,6 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hermes Mission Control</title>
+  <meta name="description" content="Read-only monitoring dashboard pro Hermes multi-agent systém: gateway, agenti, cron, incidenty, Claude kvóta. Nevolá žádné LLM API.">
+  <meta name="theme-color" content="#04060d">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex, nofollow">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Hermes Mission Control">
+  <meta property="og:description" content="BMO hlídá Hermes: gateway, 6 agentů, cron joby, incidenty a Claude kvótu. Read-only, 0 LLM tokenů.">
+  <meta property="og:image" content="/icon-512.png">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" id="favicon">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/style.css">
   <script type="importmap">
     { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -20,11 +32,13 @@
     </div>
     <div class="topbar-mid">
       <span id="overall-pill" class="pill pill-unknown">…</span>
-      <span class="muted small">read-only · 0 LLM tokens</span>
+      <span class="muted small hide-narrow">read-only · 0 LLM tokens</span>
+      <span id="updated" class="updated" title="Kdy dashboard naposledy úspěšně načetl /api/state (polling každých 5 s)">…</span>
     </div>
     <div class="topbar-right">
       <span id="clock" class="mono"></span>
       <span id="conn" class="conn" title="spojení s backendem"></span>
+      <button id="help-btn" class="btn btn-sm btn-ghost" type="button" title="Klávesové zkratky (?)" aria-label="Klávesové zkratky">?</button>
       <button id="restart-btn" class="btn btn-danger" type="button" title="Restart Hermes gateway">⟲ <span class="btn-label-full">Restart Hermes gateway</span><span class="btn-label-short">Restart</span></button>
     </div>
   </header>
@@ -40,10 +54,10 @@
       </div>
       <div class="hero-side glass">
         <h2>Stav systému</h2>
-        <ul id="issues" class="issues"></ul>
+        <ul id="issues" class="issues"><li class="empty loading">Načítám stav…</li></ul>
         <div class="kpis">
-          <div class="kpi"><div class="kpi-label">Session kvóta</div><div class="kpi-value" id="kpi-session">–</div></div>
-          <div class="kpi"><div class="kpi-label">Týdenní kvóta</div><div class="kpi-value" id="kpi-week">–</div></div>
+          <div class="kpi"><div class="kpi-label">Session kvóta</div><div class="kpi-value" id="kpi-session">–</div><div class="kpi-sub" id="kpi-session-eta"></div></div>
+          <div class="kpi"><div class="kpi-label">Týdenní kvóta</div><div class="kpi-value" id="kpi-week">–</div><div class="kpi-sub" id="kpi-week-eta"></div></div>
           <div class="kpi"><div class="kpi-label">Gateway</div><div class="kpi-value" id="kpi-gateway">–</div></div>
           <div class="kpi" title="Odhad podle child procesů gateway PID, ne přesný počet sub-agentů.">
             <div class="kpi-label">Procesy ⓘ</div><div class="kpi-value" id="kpi-procs">–</div></div>
@@ -64,13 +78,19 @@
           <span class="lg lg-week">týden</span>
           <span class="muted small" id="usage-meta"></span>
         </div>
+        <div class="forecast-line small" id="usage-forecast" title="Lineární projekce z bodů od posledního resetu (session: 3 h, týden: 48 h zpět). Jen odhad."></div>
         <div class="chart-wrap"><canvas id="usage-chart"></canvas><div id="usage-tip" class="tip hidden"></div></div>
       </article>
 
       <article class="panel glass" id="panel-gateway">
         <header class="panel-head"><h3>Gateway</h3><span id="gw-badge" class="pill pill-unknown">?</span></header>
-        <dl class="kv" id="gw-kv"></dl>
+        <dl class="kv" id="gw-kv"><dt class="loading">Načítám…</dt><dd></dd></dl>
         <div class="table-wrap"><table class="matrix" id="gw-matrix"></table></div>
+        <details class="restarts" id="gw-restarts-box" data-key="restarts">
+          <summary class="muted small">Restarty <span id="gw-restarts-count"></span></summary>
+          <ul class="restart-list" id="gw-restarts"></ul>
+          <div class="muted small">Volání <code>/api/restart</code> a změny PID / startu gateway zachycené od spuštění dashboardu (jen v paměti, nic se nezapisuje).</div>
+        </details>
       </article>
 
       <article class="panel glass span-3" id="panel-agents">
@@ -101,6 +121,7 @@
           <h3>Tokeny / náklady per profil <span class="muted small">(state.db, 14 dní)</span></h3>
           <div class="seg" id="token-mode"><button data-m="tokens" class="active">tokeny</button><button data-m="cost">$</button></div>
         </header>
+        <div class="forecast" id="forecast"></div>
         <div class="legend" id="token-legend"></div>
         <div class="chart-wrap short"><canvas id="token-chart"></canvas><div id="token-tip" class="tip hidden"></div></div>
       </article>
@@ -125,8 +146,11 @@
     </div>
   </div>
 
+  <div id="key-hint" class="key-hint hidden" aria-live="polite"></div>
+
   <footer class="foot muted small">
     Hermes Mission Control — čistě čtecí vrstva nad lokálními soubory / SQLite / CLI. Nevolá žádné LLM API.
+    <span class="hide-narrow">· Zkratky: <kbd>?</kbd></span>
   </footer>
 
   <script src="/app.js"></script>

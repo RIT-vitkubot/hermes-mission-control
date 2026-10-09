@@ -315,6 +315,45 @@ body.modal-open { overflow: hidden; }
 .runs pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); max-height: 220px; overflow: auto; }
 .repo-err-full { color: var(--err); }
 
+/* ---- round 3: freshness, forecasts, restarts, shortcuts ---- */
+.updated { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.updated.stale { color: var(--warn); }
+.updated.stale-err { color: var(--err); }
+.btn-ghost { padding: 3px 9px; font-weight: 700; color: var(--muted); }
+.btn-ghost:hover { color: var(--cyan); }
+.kpi-sub { font-size: 11px; color: var(--muted); margin-top: 2px; min-height: 1em; }
+.forecast-line { color: var(--muted); margin: -2px 0 6px; min-height: 1.2em; }
+.forecast { margin-bottom: 8px; }
+.fc-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.fc { padding: 8px 12px; border-radius: 10px; background: rgba(0, 0, 0, .25); border: 1px solid var(--glass-border); min-width: 0; }
+.fc-main { border-color: rgba(62, 242, 255, .45); box-shadow: 0 0 14px rgba(62, 242, 255, .12); }
+.fc-val { font-size: 20px; font-weight: 700; text-shadow: var(--glow); overflow-wrap: anywhere; }
+.fc .up { color: var(--warn); } .fc .down { color: var(--ok); }
+.fc-per { margin-top: 6px; }
+.fc-per .legend { margin-top: 6px; }
+.fc-note { margin-top: 4px; }
+.restarts { margin-top: 10px; }
+.restarts summary { cursor: pointer; }
+.restart-list { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+.restart-list li { font-size: 12px; padding: 5px 8px; border-radius: 6px; background: rgba(255, 255, 255, .03); border-left: 3px solid var(--ok); }
+.restart-list li.error { border-color: var(--err); }
+.restart-list li.empty { border: 0; background: none; padding: 4px 0; }
+.restart-msg { overflow-wrap: anywhere; }
+.error-inline { color: var(--err); font-style: normal; }
+kbd {
+  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11px; padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--glass-border); border-bottom-width: 2px; background: rgba(255, 255, 255, .06); color: var(--text);
+}
+.keys td { padding: 7px 8px; font-size: 13px; }
+.keys td:first-child { white-space: nowrap; width: 1%; }
+.key-hint {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60;
+  padding: 6px 14px; border-radius: 10px; background: rgba(5, 10, 24, .92); border: 1px solid var(--glass-border);
+  font-family: "JetBrains Mono", ui-monospace, monospace; color: var(--cyan); box-shadow: var(--glow);
+}
+.panel.flash { animation: flash 1s ease-out; }
+@keyframes flash { 0% { box-shadow: 0 0 0 2px var(--cyan), 0 0 30px rgba(62, 242, 255, .5); } 100% { box-shadow: 0 10px 40px rgba(0, 0, 0, .35); } }
+
 @media (max-width: 1100px) {
   .detail-grid { grid-template-columns: 1fr; }
   .hero { grid-template-columns: 1fr; }
@@ -342,6 +381,10 @@ body.modal-open { overflow: hidden; }
   .topbar-mid .pill { font-size: 10px; padding: 2px 7px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar-right { gap: 8px; flex-wrap: nowrap; }
   #clock { display: none; }
+  .hide-narrow { display: none; }
+  .btn-ghost { display: none; }
+  .fc-cards { grid-template-columns: 1fr 1fr; }
+  .fc-main { grid-column: 1 / -1; }
   .topbar .btn { padding: 6px 10px; }
   .panel { padding: 12px; }
   .chart-wrap { height: 220px; }
