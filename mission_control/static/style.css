@@ -501,3 +501,11 @@ table.compare td.extreme { background: rgba(255, 197, 61, .1); box-shadow: inset
 .day-spark { display: flex; align-items: flex-end; gap: 2px; height: 24px; margin-top: 6px; }
 .day-spark span { flex: 1; min-width: 2px; border-radius: 1px 1px 0 0; background: var(--cyan); opacity: .55; }
 .day-spark span:last-child { opacity: 1; box-shadow: 0 0 6px var(--cyan); }
+.search-results li.sr-hint { padding: 2px 2px 6px; }
+.toast {
+  position: fixed; right: 16px; bottom: 16px; z-index: 70; max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 14px; border-radius: 10px; background: rgba(5, 10, 24, .95); border: 1px solid var(--glass-border);
+  box-shadow: var(--glow); font-size: 13px; animation: modal-in .18s ease-out;
+}
+.seg button:disabled { opacity: .4; cursor: not-allowed; }
+.palette-row + .palette-row, .muted + .palette-row { margin-top: 10px; }

@@ -38,8 +38,8 @@
     <div class="topbar-right">
       <span id="clock" class="mono"></span>
       <span id="conn" class="conn" title="spojení s backendem"></span>
-      <button id="search-btn" class="btn btn-sm btn-icon" type="button" title="Hledat na dashboardu (/)" aria-label="Hledat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
-      <button id="help-btn" class="btn btn-sm btn-ghost" type="button" title="Klávesové zkratky (?)" aria-label="Klávesové zkratky">?</button>
+      <button id="search-btn" class="btn btn-sm btn-icon" type="button" title="Hledat a příkazy (/ nebo Ctrl+K)" aria-label="Hledat a příkazy"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
+      <button id="help-btn" class="btn btn-sm btn-ghost" type="button" title="Zkratky a nastavení (?)" aria-label="Zkratky a nastavení">?</button>
       <button id="restart-btn" class="btn btn-danger" type="button" title="Restartovat Hermes gateway">⟲ <span class="btn-label-full">Restartovat gateway</span><span class="btn-label-short">Restart</span></button>
     </div>
   </header>
@@ -153,6 +153,7 @@
   </div>
 
   <div id="key-hint" class="key-hint hidden" aria-live="polite"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <footer class="foot muted small">
     Hermes Mission Control — čistě čtecí vrstva nad lokálními soubory / SQLite / CLI. Nevolá žádné LLM API.

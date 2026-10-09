@@ -158,6 +158,7 @@
     $("kpi-procs").textContent = st.processes.estimate == null ? "N/A" : "~" + st.processes.estimate;
 
     updateFavicon(sum.level, sum.issues.length);
+    HMCNotify.check(st.incidents || []);
     renderRestarts(st.restarts || [], st.now);
     renderGateway(st.gateway, st.now);
     renderAgents(st.agents, st.now, st.processes);
@@ -324,6 +325,58 @@
   function applyTitle() {
     document.title = (titleIssues ? "(" + titleIssues + ") " : "") + (modalTitle ? modalTitle + " · " : "") + "Hermes Mission Control";
   }
+
+  // ---------------------------------------------------------------- toast + notifications
+  var toastTimer = null;
+  function toast(html, ms) {
+    var el = $("toast");
+    el.innerHTML = html; el.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.add("hidden"); }, ms || 6000);
+  }
+  // Opt-in browser notifications for NEW critical incidents. Purely client
+  // side: the set of already seen incidents lives in memory, the on/off
+  // choice in localStorage (like the palette). While enabled, a hidden tab
+  // still polls /api/state every 30 s so the notification can fire.
+  var NOTIFY_KEY = "hmc-notify";
+  var HMCNotify = (function () {
+    var seen = { keys: {}, primed: false };
+    function pref() { try { return localStorage.getItem(NOTIFY_KEY) === "1"; } catch (e) { return false; } }
+    function store(on) { try { localStorage.setItem(NOTIFY_KEY, on ? "1" : "0"); } catch (e) { /* this page only */ } }
+    function supported() { return "Notification" in window && window.isSecureContext; }
+    function enabled() { return supported() && Notification.permission === "granted" && pref(); }
+    function sync() {
+      Array.prototype.forEach.call(document.querySelectorAll("#d-notify button"), function (x) {
+        var on = (x.getAttribute("data-n") === "1") === enabled();
+        x.classList.toggle("active", on); x.setAttribute("aria-pressed", String(on));
+      });
+    }
+    function enable() {
+      if (!supported()) { toast("Notifikace tu nejdou — prohlížeč je povolí jen na https nebo http://127.0.0.1 / localhost."); return; }
+      Notification.requestPermission().then(function (p) {
+        if (p === "granted") { store(true); toast("🔔 Notifikace zapnuté — ozvu se při novém kritickém incidentu."); }
+        else { store(false); toast("Prohlížeč notifikace zablokoval (" + esc(p) + "). Povolíš je v nastavení stránky."); }
+        sync();
+      });
+    }
+    function disable() { store(false); toast("🔕 Notifikace vypnuté."); sync(); }
+    function check(incidents) {
+      var fresh = L.newCriticals(seen, incidents);
+      if (!fresh.length || !enabled()) return;
+      var first = fresh[0];
+      var title = fresh.length > 1 ? "Hermes: " + fresh.length + " nové kritické incidenty" : "Hermes: kritický incident" + (first.profile ? " · " + first.profile : "");
+      var href = incidentsHash({ profile: fresh.length > 1 ? "" : (first.profile || ""), level: "critical" });
+      if (!document.hidden && document.hasFocus()) { // looking at the page already: in-page toast is enough
+        toast("⚠ " + esc(title) + ' — <a href="' + href + '">zobrazit ›</a>', 10000);
+        return;
+      }
+      try {
+        var n = new Notification(title, { body: first.message, tag: "hmc-critical", icon: "/icon-192.png" });
+        n.onclick = function () { window.focus(); navigate(href); n.close(); };
+      } catch (e) { /* e.g. Android Chrome needs a SW notification; the toast is shown next time */ }
+    }
+    return { supported: supported, enabled: enabled, enable: enable, disable: disable, check: check, sync: sync };
+  })();
 
   // "updated Xs ago" next to the clock; turns amber/red when polls fail
   function tickUpdated() {
@@ -1226,10 +1279,28 @@
   // -- global search ------------------------------------------------------------
   // Searches what the dashboard already loaded (agents, cron jobs, repos,
   // today's incidents, panels and views) — no extra backend calls.
-  var fold = L.fold;
-  var SEARCH_TYPES = { view: "pohled", panel: "panel", agent: "agent", cron: "cron job", repo: "GitHub", incident: "incident" };
+  var SEARCH_TYPES = { action: "akce", view: "pohled", panel: "panel", agent: "agent", cron: "cron job", repo: "GitHub", incident: "incident" };
+  function clickSel(sel) { return function () { var b = document.querySelector(sel); if (b) b.click(); }; }
+  // Command palette actions: everything here only changes the view, except
+  // the restart, which still goes through the same confirm() dialog.
+  function paletteActions() {
+    var acts = [
+      ["Obnovit data", "načíst všechny panely hned (r)", pollAll, "refresh reload nacist"],
+      ["Přepnout tokeny ↔ $", "graf tokenů / nákladů ($)", clickSel("#token-mode button:not(.active)"), "cost naklady dolar"],
+      [getPalette() === "cb" ? "Neonová paleta stavů" : "Paleta pro barvoslepé", "barvy OK / varování / chyba", function () { setPalette(getPalette() === "cb" ? "default" : "cb"); }, "colour blind barvoslepe paleta"]
+    ];
+    if (HMCNotify.supported()) {
+      acts.push(HMCNotify.enabled() ? ["Vypnout notifikace", "upozornění na nové kritické incidenty", HMCNotify.disable, "notifikace notification"]
+        : ["Zapnout notifikace", "upozornit v prohlížeči na nový kritický incident", HMCNotify.enable, "notifikace notification critical"]);
+    }
+    [["6h", "6 h"], ["24h", "24 h"], ["7d", "7 dní"], ["30d", "30 dní"], ["all", "vše"]].forEach(function (w) {
+      acts.push(["Kvóta: okno " + w[1], "graf Claude kvóty", clickSel('#usage-windows button[data-w="' + w[0] + '"]'), "quota usage window okno"]);
+    });
+    acts.push(["Restartovat gateway…", "hermes gateway restart (s potvrzením)", clickSel("#restart-btn"), "restart gateway"]);
+    return acts.map(function (a) { return { type: "action", title: a[0], sub: a[1], run: a[2], extra: a[3] }; });
+  }
   function searchIndex() {
-    var st = window.__mcLastState || {}, items = [];
+    var st = window.__mcLastState || {}, items = paletteActions();
     [["#/compare", "Srovnání profilů", "HP, chyby, tokeny, nejdelší cron vedle sebe", "compare porovnani health"],
      ["#/incidents", "Plný log incidentů", "chyby + incidenty až 7 dní, filtry", "errors log chyby"],
      ["#/help", "Klávesové zkratky", "nápověda", "help shortcuts"]].forEach(function (v) {
@@ -1262,38 +1333,47 @@
     return items;
   }
   function searchItems(q) {
-    var words = fold(q).split(/\s+/).filter(Boolean);
-    if (!words.length) return [];
     var order = Object.keys(SEARCH_TYPES);
     return searchIndex().map(function (it) {
-      var title = fold(it.title), hay = title + " " + fold(it.sub) + " " + fold(it.extra);
-      if (!words.every(function (w) { return hay.indexOf(w) >= 0; })) return null;
-      it.rank = (title.indexOf(words[0]) === 0 ? 0 : title.indexOf(words[0]) > 0 ? 1 : 2) * 10 + order.indexOf(it.type);
+      var m = L.matchRank(q, it.title, it.sub + " " + (it.extra || ""));
+      if (m == null) return null;
+      it.rank = m * 10 + order.indexOf(it.type);
       return it;
     }).filter(Boolean).sort(function (a, b) { return a.rank - b.rank; }).slice(0, 50);
   }
+  // Empty palette: what needs attention first, then agents and actions.
+  function paletteSuggestions() {
+    var all = searchIndex();
+    var hot = all.filter(function (it) { return (it.type === "cron" && it.level === "error") || (it.type === "incident" && it.level === "critical"); });
+    var agents = all.filter(function (it) { return it.type === "agent"; });
+    var acts = all.filter(function (it) { return it.type === "action"; }).slice(0, 4);
+    var views = all.filter(function (it) { return it.type === "view"; });
+    return hot.slice(0, 5).concat(agents, acts, views);
+  }
   function renderSearch(r) {
-    setModalHead(crumbHome(), "Hledání");
+    setModalHead(crumbHome(), "Hledání a příkazy");
     $("modal-body").innerHTML = '<div class="filters filters-bar"><input id="d-search-q" type="search" placeholder="agent, cron job, repo, chyba, panel…" aria-label="hledat na dashboardu" autocomplete="off" value="' + esc(r.q || "") + '"></div>' +
       '<ul class="search-results" id="d-search-list" role="listbox"></ul>';
     var sel = 0, results = [];
     var draw = function () {
       var q = $("d-search-q").value;
-      results = searchItems(q);
+      var empty = !q.trim();
+      results = empty ? paletteSuggestions() : searchItems(q);
       sel = Math.min(sel, Math.max(0, results.length - 1));
-      $("d-search-list").innerHTML = !q.trim() ? '<li class="empty muted">Piš pro hledání v agentech, cron jobech, repech, dnešních incidentech a panelech. <kbd>↑</kbd> <kbd>↓</kbd> výběr, <kbd>Enter</kbd> otevřít.</li>'
-        : results.length ? results.map(function (it, i) {
+      $("d-search-list").innerHTML = (empty ? '<li class="sr-hint muted small">Agenti, cron joby, repa, dnešní incidenty, panely i akce. <kbd>↑</kbd> <kbd>↓</kbd> výběr, <kbd>Enter</kbd> otevřít.</li>' : "") +
+        (results.length ? results.map(function (it, i) {
           var href = it.href || it.url || "#";
           return '<li role="option" aria-selected="' + (i === sel) + '" class="' + (i === sel ? "sel " : "") + esc(it.level || "") + '"><a href="' + esc(href) + '" data-i="' + i + '"' + (it.url ? ' target="_blank" rel="noopener"' : "") + ">" +
             '<span class="sr-type">' + esc(SEARCH_TYPES[it.type]) + '</span><span class="sr-title"' + (it.color ? ' style="color:' + it.color + '"' : "") + ">" + esc(it.title) + "</span>" +
             '<span class="sr-sub muted small">' + esc(it.sub) + "</span></a></li>";
-        }).join("") + '<li class="sr-more"><a href="' + incidentsHash({ hours: "168", q: q }) + '">hledat „' + esc(q) + '“ v plném logu incidentů (7 dní) ›</a></li>'
-        : '<li class="empty">Nic nenalezeno. <a href="' + incidentsHash({ hours: "168", q: q }) + '">Zkusit plný log incidentů (7 dní) ›</a></li>';
+        }).join("") + (empty ? "" : '<li class="sr-more"><a href="' + incidentsHash({ hours: "168", q: q }) + '">hledat „' + esc(q) + '“ v plném logu incidentů (7 dní) ›</a></li>')
+        : '<li class="empty">Nic nenalezeno. <a href="' + incidentsHash({ hours: "168", q: q }) + '">Zkusit plný log incidentů (7 dní) ›</a></li>');
       history.replaceState(null, "", "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""));
     };
     var open = function (it) {
       if (!it) return;
       if (it.panel) { closeModal(); setTimeout(function () { goPanel(it.panel); }, 80); return; }
+      if (it.run) { closeModal(); setTimeout(it.run, 80); return; }
       if (it.url) { window.open(it.url, "_blank", "noopener"); return; }
       modal.pendingPush = true; location.hash = it.href;
     };
@@ -1312,7 +1392,7 @@
       var a = e.target.closest ? e.target.closest("a[data-i]") : null;
       if (!a) return;
       var it = results[+a.getAttribute("data-i")];
-      if (it && it.panel) { e.preventDefault(); open(it); }
+      if (it && (it.panel || it.run)) { e.preventDefault(); open(it); }
     });
     draw();
     input.focus();
@@ -1321,7 +1401,8 @@
 
   // -- keyboard shortcuts -------------------------------------------------------
   var SHORTCUTS = [
-    ["?", "tahle nápověda"],
+    ["?", "tahle nápověda a nastavení (paleta, notifikace)"],
+    ["Ctrl K", "příkazová paleta: skok na profil / cron job / incident / panel, akce (na Macu ⌘ K)"],
     ["/", "hledat na celém dashboardu (v detailu s vlastním hledáním: hledat v něm)"],
     ["g a", "agenti"], ["g s", "gateway"], ["g u", "Claude kvóta"], ["g i", "co teď hoří"],
     ["g c", "cron úlohy"], ["g t", "tokeny / náklady"], ["g r", "GitHub repa"], ["g g", "nahoru (BMO)"],
@@ -1335,7 +1416,7 @@
   var gPending = 0;
 
   function renderHelp() {
-    setModalHead(crumbHome(), "Klávesové zkratky");
+    setModalHead(crumbHome(), "Zkratky a nastavení");
     $("modal-body").innerHTML = '<table class="keys">' + SHORTCUTS.map(function (k) {
       return "<tr><td>" + k[0].split(" ").map(function (x) { return x === "–" ? "–" : "<kbd>" + esc(x) + "</kbd>"; }).join(" ") + "</td><td>" + esc(k[1]) + "</td></tr>";
     }).join("") + "</table>" +
@@ -1343,19 +1424,32 @@
       [["default", "neonová"], ["cb", "pro barvoslepé"]].map(function (o) {
         return '<button type="button" data-p="' + o[0] + '"' + (getPalette() === o[0] ? ' class="active" aria-pressed="true"' : ' aria-pressed="false"') + ">" + o[1] + "</button>";
       }).join("") + '</div></div><p class="muted small">Pro barvoslepé: OK = modrá, varování = žlutá, chyba = oranžová a chybové tečky jsou kosočtverce. Uloží se jen v tomhle prohlížeči.</p>' +
+      '<div class="palette-row"><span>notifikace kritických incidentů</span><div class="seg" id="d-notify" role="group" aria-label="notifikace">' +
+      '<button type="button" data-n="1"' + (HMCNotify.supported() ? "" : " disabled") + ">zapnuto</button><button type=\"button\" data-n=\"0\">vypnuto</button></div></div>" +
+      '<p class="muted small">' + (HMCNotify.supported()
+        ? "Upozornění v prohlížeči jen na nové incidenty úrovně kritické (ne na ty, co už byly vidět při otevření). Dokud jsou zapnuté, skrytá záložka se ptá na stav jednou za 30 s."
+        : "Prohlížeč povolí notifikace jen v zabezpečeném kontextu: https, nebo http://127.0.0.1 / localhost (přes VPN adresu po http nejdou).") + "</p>" +
       '<p class="muted small">Zkratky nefungují, když píšeš do pole (kromě <kbd>Esc</kbd>). Detailní pohledy mají sdílitelné URL (<code>#/agent/…</code>, <code>#/cron/…</code>, <code>#/incidents…</code>, <code>#/compare</code>, <code>#/search?q=…</code>, <code>#/help</code>).</p>';
+    HMCNotify.sync();
   }
-  document.addEventListener("click", function (e) {
-    var b = e.target.closest ? e.target.closest("#d-palette button") : null;
-    if (!b) return;
-    var p = b.getAttribute("data-p");
+  function setPalette(p) {
     try { localStorage.setItem(PALETTE_KEY, p); } catch (err) { /* private mode: this page only */ }
     applyPalette(p);
     Array.prototype.forEach.call(document.querySelectorAll("#d-palette button"), function (x) {
-      x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", String(x === b));
+      var on = x.getAttribute("data-p") === p;
+      x.classList.toggle("active", on); x.setAttribute("aria-pressed", String(on));
     });
     if (window.__mcLastState) updateFavicon(window.__mcLastState.summary.level, window.__mcLastState.summary.issues.length);
     drawUsage(lastUsage); drawTokens(lastTokens);
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("#d-palette button") : null;
+    if (b) setPalette(b.getAttribute("data-p"));
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("#d-notify button") : null;
+    if (!b || b.disabled) return;
+    if (b.getAttribute("data-n") === "1") HMCNotify.enable(); else HMCNotify.disable();
   });
   function navigate(hash) {
     if (location.hash === hash) { route(); return; }
@@ -1381,6 +1475,11 @@
     return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
   }
   document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K")) {
+      e.preventDefault(); // works from inside inputs too, like in other apps
+      if (modal.route && modal.route.view === "search") closeModal(); else navigate("#/search");
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTyping(e.target)) {
       if (e.key === "Escape" && !modal.open) e.target.blur();
@@ -1500,6 +1599,7 @@
     navigator.serviceWorker.register("/sw.js").catch(function () { /* optional */ });
   }
   every(POLL_STATE_MS, pollState);
+  setInterval(function () { if (document.hidden && HMCNotify.enabled()) pollState(); }, 30000);
   every(POLL_USAGE_MS, pollUsage);
   every(POLL_USAGE_MS, pollSpark);
   every(POLL_SLOW_MS, pollGithub);
