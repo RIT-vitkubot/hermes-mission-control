@@ -415,3 +415,17 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* round 4: health badge, cron sparkline */
+.agent-badges { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.health { display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 8px; border-radius: 999px; font: 700 12px/1.6 ui-monospace, monospace; text-decoration: none; border: 1px solid currentColor; }
+.health-k { font-weight: 400; font-size: 9px; letter-spacing: .06em; opacity: .75; }
+.health-ok { color: var(--ok); }
+.health-warn { color: var(--warn); }
+.health-error { color: var(--err); box-shadow: 0 0 10px rgba(255, 77, 109, .35); }
+.health-factors { margin: 4px 0 0; padding-left: 16px; font-size: 12px; }
+.runs-cell { display: inline-flex; align-items: center; gap: 8px; }
+.spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; vertical-align: middle; }
+.spark-bar { width: 4px; border-radius: 1px; background: var(--ok); opacity: .8; }
+.spark-bar.error { background: var(--err); opacity: 1; box-shadow: 0 0 4px var(--err); }
+.job-list .spark { margin-left: 8px; }

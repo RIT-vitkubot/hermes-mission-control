@@ -193,7 +193,8 @@
         return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + "</span>";
       }).join(" &nbsp;");
       return '<div class="agent ' + cls + (a.busy ? " busy" : "") + '">' +
-        '<div class="agent-head"><a class="agent-name" href="' + agentHref(a.profile) + '" style="color:' + (PROFILE_COLORS[a.profile] || "inherit") + '">' + esc(a.label) + "</a>" + conn + "</div>" +
+        '<div class="agent-head"><a class="agent-name" href="' + agentHref(a.profile) + '" style="color:' + (PROFILE_COLORS[a.profile] || "inherit") + '">' + esc(a.label) + "</a>" +
+        '<span class="agent-badges">' + healthBadge(a.health) + conn + "</span></div>" +
         '<div class="agent-activity">' + (a.busy ? "⚡ " : "💤 ") + esc(a.activity) + "</div>" +
         (platforms ? '<div class="agent-row"><span>platformy</span><span>' + platforms + "</span></div>" : "") +
         '<div class="agent-row"><span>cron</span><span>' + esc(counts) + "</span></div>" +
@@ -234,13 +235,35 @@
           '<td data-label="stav"><span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span></td>" +
           '<td data-label="poslední" title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(j.last_status) : "") + "</td>" +
           '<td data-label="další" title="' + esc(fmtDateTime(j.next_run_at)) + '">' + esc(j.enabled ? rel(j.next_run_at, now) : "–") + "</td>" +
-          '<td data-label="streak">' + (j.failure_streak > 0 ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</td></tr>";
+          '<td data-label="běhy"><span class="runs-cell">' + sparkHTML(j.recent) + (j.failure_streak > 0 ? '<span class="streak">' + j.failure_streak + "×</span>" : '<span class="muted">0</span>') + "</span></td></tr>";
       }).join("");
       return '<div class="cron-profile"><h4><a href="' + agentHref(c.profile) + '" style="color:' + (PROFILE_COLORS[c.profile] || "inherit") + '">' + esc(c.profile) + "</a><span class=\"muted\">" + c.jobs.length + " jobů</span></h4>" +
-        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th>streak</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
+        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th title=\"posledních až 12 běhů (výška = délka běhu, odhad) a failure streak\">běhy</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
         "</div>";
     }).join(""));
     $("cron-meta").textContent = total + " jobů celkem" + (failing ? " · " + failing + " v chybě" : "");
+  }
+
+  // Last runs as a tiny bar chart: colour = status, height = run duration
+  // (estimated from output file name vs. mtime; full height when unknown).
+  function sparkHTML(runs) {
+    if (!runs || !runs.length) return '<span class="spark spark-empty muted" title="žádná historie běhů">–</span>';
+    var maxD = 0, failed = 0;
+    runs.forEach(function (r) { if (r.duration > maxD) maxD = r.duration; if (r.status === "error") failed++; });
+    return '<span class="spark" role="img" aria-label="' + runs.length + " posledních běhů, " + failed + ' chyb">' + runs.map(function (r) {
+      var h = r.duration != null && maxD > 0 ? 5 + Math.round(11 * r.duration / maxD) : 16;
+      var tip = fmtDateTime(r.ts) + " · " + r.status + (r.duration != null ? " · ~" + fmtDur(r.duration) : "");
+      return '<span class="spark-bar ' + esc(r.status) + '" style="height:' + h + 'px" title="' + esc(tip) + '"></span>';
+    }).join("") + "</span>";
+  }
+  function healthTip(h) {
+    return "Health " + h.score + "/100 — " + (h.factors.length
+      ? h.factors.map(function (f) { return f.label + " (−" + f.penalty + ")"; }).join(", ") : "bez problémů");
+  }
+  function healthBadge(h) {
+    if (!h) return "";
+    return '<a class="health health-' + esc(h.level) + '" href="#/compare" title="' + esc(healthTip(h) + " · klik = srovnání profilů") +
+      '" aria-label="' + esc(healthTip(h)) + '"><span class="health-k">HP</span>' + h.score + "</a>";
   }
 
   var RESTART_KINDS = {
@@ -842,6 +865,9 @@
           return '<span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + ' <span class="muted">' + esc(platformTitle(p)) + "</span>";
         }).join("<br>") : '<span class="muted">žádné</span>') + "</dd>" +
         '<dt title="Odhad podle child procesů gateway PID">procesy ⓘ</dt><dd>' + (a.processes == null ? "N/A" : "~" + a.processes) + "</dd>" +
+        (a.health ? "<dt>health</dt><dd>" + healthBadge(a.health) + (a.health.factors.length ? '<ul class="health-factors">' + a.health.factors.map(function (f) {
+          return "<li>" + esc(f.label) + ' <span class="muted">−' + f.penalty + "</span></li>";
+        }).join("") + "</ul>" : ' <span class="muted">bez problémů</span>') + "</dd>" : "") +
         "</dl>" +
         (procs.length ? '<div class="table-wrap"><table class="proc-table"><tr><th>PID</th><th>běží</th><th>příkaz</th></tr>' + procs.map(function (x) {
           return "<tr><td class=\"mono\">" + esc(x.pid) + "</td><td>" + esc(fmtDur(x.elapsed)) + '</td><td class="mono cmd">' + esc(x.cmd) + "</td></tr>";
@@ -850,7 +876,7 @@
         '<section class="detail-card"><h4>Cron joby <span class="muted small">(' + cron.jobs.length + ")</span></h4>" +
         (cron.available === false ? '<div class="empty">jobs.json nenalezen</div>' : cron.jobs.length ? '<ul class="job-list">' + cron.jobs.map(function (j) {
           return '<li><a href="' + jobHref(r.profile, j) + '">' + esc(j.name) + '</a> <span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span>" +
-            '<span class="muted small">' + esc(j.schedule || "") + " · poslední " + esc(rel(j.last_run_at, st.now)) + (j.failure_streak ? ' · <span class="streak">' + j.failure_streak + "×</span>" : "") + "</span></li>";
+            '<span class="muted small">' + esc(j.schedule || "") + " · poslední " + esc(rel(j.last_run_at, st.now)) + (j.failure_streak ? ' · <span class="streak">' + j.failure_streak + "×</span>" : "") + "</span>" + sparkHTML(j.recent) + "</li>";
         }).join("") + "</ul>" : '<div class="empty">žádné joby</div>') +
         "</section></div>" +
         '<section class="detail-card"><div class="panel-head"><h4>Tokeny / náklady <span class="muted small">(state.db, 30 dní)</span></h4>' +
