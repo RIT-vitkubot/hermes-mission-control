@@ -10,7 +10,8 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
+from collections import deque
+from datetime import date, datetime, timedelta
 
 from . import PROFILES
 from . import parsing
@@ -141,6 +142,11 @@ class Collector(object):
         self.cfg = config
         self.cache = TTLCache()
         self._restart_lock = threading.Lock()
+        # Restart timeline lives only in memory (lost when the dashboard
+        # restarts); nothing is ever written to disk for it.
+        self._events_lock = threading.Lock()
+        self._restart_events = deque(maxlen=50)
+        self._gw_snapshot = None
 
     # -- 1. usage ---------------------------------------------------------
     def usage_points(self):
@@ -156,8 +162,13 @@ class Collector(object):
         points = self.usage_points()
         if points is None:
             return {"available": False, "window": window, "points": [], "latest": None, "tz": host_tz()}
-        out = parsing.usage_series(points, window, time.time())
+        now = time.time()
+        out = parsing.usage_series(points, window, now)
         out["available"] = True
+        out["forecast"] = {
+            "session": parsing.quota_eta(points, "session_pct", now, lookback=3 * 3600),
+            "week": parsing.quota_eta(points, "week_pct", now, lookback=48 * 3600, min_span=3 * 3600),
+        }
         out["tz"] = host_tz()
         return out
 
@@ -184,8 +195,27 @@ class Collector(object):
             if pid:
                 pid_alive = os.path.exists("/proc/%d" % pid) if os.path.isdir("/proc") else None
                 uptime = self._uptime(pid) if pid_alive else None
-        return parsing.summarize_gateway(raw, self.cfg.profiles, now=time.time(),
-                                         pid_alive=pid_alive, uptime=uptime)
+        now = time.time()
+        summary = parsing.summarize_gateway(raw, self.cfg.profiles, now=now,
+                                            pid_alive=pid_alive, uptime=uptime)
+        summary["started_at"] = (now - uptime) if uptime is not None else None
+        self._observe_gateway(summary, now)
+        return summary
+
+    def _observe_gateway(self, gw, now):
+        """Record gateway down/up/restart transitions seen while polling."""
+        snap = {"pid": gw.get("pid"), "running": bool(gw.get("running")), "started_at": gw.get("started_at")}
+        with self._events_lock:
+            event = parsing.gateway_transition(self._gw_snapshot, snap)
+            self._gw_snapshot = snap
+            if event:
+                event.update({"ts": now, "source": "observed"})
+                self._restart_events.append(event)
+
+    def restart_events(self, limit=20):
+        """Newest-first list of restart API calls and observed transitions."""
+        with self._events_lock:
+            return list(reversed(self._restart_events))[:limit]
 
     @staticmethod
     def _uptime(pid):
@@ -441,19 +471,68 @@ class Collector(object):
         day_keys = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
         return {"days": days, "day_keys": day_keys, "profiles": profiles, "tz": host_tz()}
 
+    # -- 1c. monthly forecast --------------------------------------------
+    def forecast(self):
+        return self.cache.get("forecast", 300, self._forecast)
+
+    def _forecast(self):
+        today = date.today()
+        prev_start = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        since = time.mktime(prev_start.timetuple())
+        profiles, total_cost, total_tokens = [], {}, {}
+        for p in self.cfg.profiles:
+            path = os.path.join(self.cfg.profile_home(p), "state.db")
+            entry = {"profile": p, "available": False}
+            if os.path.exists(path):
+                try:
+                    days, _ = read_token_usage(path, since)
+                except sqlite3.Error as exc:
+                    entry["error"] = str(exc)
+                else:
+                    cost = {d: parsing.day_cost(b) for d, b in days.items()}
+                    tokens = {d: parsing.day_tokens(b) for d, b in days.items()}
+                    for d in days:
+                        total_cost[d] = total_cost.get(d, 0) + cost[d]
+                        total_tokens[d] = total_tokens.get(d, 0) + tokens[d]
+                    entry.update(available=True, cost=parsing.month_forecast(cost, today),
+                                 tokens=parsing.month_forecast(tokens, today))
+            profiles.append(entry)
+        avail = any(e["available"] for e in profiles)
+        return {
+            "available": avail,
+            "today": today.isoformat(),
+            "cost": parsing.month_forecast(total_cost, today) if avail else None,
+            "tokens": parsing.month_forecast(total_tokens, today) if avail else None,
+            "profiles": profiles,
+            "method": "průměr posledních 7 celých dní × zbývající dny v měsíci",
+        }
+
     # -- 7. restart --------------------------------------------------------
-    def restart_gateway(self, timeout=120):
+    def restart_gateway(self, timeout=120, client=None):
         if not self.cfg.hermes_bin:
-            return {"ok": False, "error": "hermes CLI not found on PATH"}
+            result = {"ok": False, "error": "hermes CLI not found on PATH"}
+            self.record_restart_call(time.time(), result, client)
+            return result
         if not self._restart_lock.acquire(blocking=False):
             return {"ok": False, "error": "restart already in progress"}
         try:
             started = time.time()
             rc, out, err = run_cmd([self.cfg.hermes_bin, "gateway", "restart"], timeout=timeout)
-            return {"ok": rc == 0, "returncode": rc, "stdout": out[-8000:], "stderr": err[-8000:],
-                    "duration": round(time.time() - started, 2)}
+            result = {"ok": rc == 0, "returncode": rc, "stdout": out[-8000:], "stderr": err[-8000:],
+                      "duration": round(time.time() - started, 2)}
+            self.record_restart_call(started, result, client)
+            return result
         finally:
             self._restart_lock.release()
+
+    def record_restart_call(self, ts, result, client=None):
+        tail = (result.get("stderr") or result.get("stdout") or result.get("error") or "").strip()
+        with self._events_lock:
+            self._restart_events.append({
+                "ts": ts, "source": "api", "kind": "api_restart", "ok": bool(result.get("ok")),
+                "returncode": result.get("returncode"), "duration": result.get("duration"),
+                "client": client, "message": tail.splitlines()[-1][:200] if tail else None,
+            })
 
     # -- aggregate ---------------------------------------------------------
     def state(self):
@@ -502,6 +581,7 @@ class Collector(object):
             "cron": crons,
             "incidents": incidents,
             "usage_latest": latest,
+            "restarts": self.restart_events(10),
         }
 
 
