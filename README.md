@@ -94,8 +94,10 @@ znovu načte. Stav běhu z `cron/output` je odhad z obsahu výstupu
 
   | klávesa | akce |
   |---------|------|
-  | `?` | nápověda |
+  | `?` | nápověda a nastavení (paleta, notifikace) |
+  | `Ctrl K` / `⌘ K` | příkazová paleta (skok kamkoli + akce) |
   | `/` | hledání na celém dashboardu (v detailu s vlastním hledáním — log, incidenty — hledá v něm) |
+  | `g o` | časová osa |
   | `g a` / `g s` / `g u` / `g i` / `g c` / `g t` / `g r` / `g g` | skok na agenty / gateway / kvótu / incidenty / cron / tokeny / GitHub / nahoru |
   | `g l` | plný log incidentů |
   | `g p` | srovnání profilů |
@@ -177,6 +179,53 @@ znovu načte. Stav běhu z `cron/output` je odhad z obsahu výstupu
   ze zastaralého `gateway_state.json` — jsou šedé, poslední známý stav je
   v tooltipu.
 
+### Round 5: časová osa, příkazová paleta, notifikace, přístupnost
+
+- **Časová osa všech profilů** (panel pod Agenty, `g o`, `/api/timeline`):
+  pruh za 6 h / 24 h / 3 dny, pro každý profil nejhorší stav po 15 minutách —
+  zelená = běh cronu OK, žlutá = varování, červená = chyba, červená s bílým
+  okrajem = kritické; šrafovaný pás = gateway neběžel; `✕` = neúspěšný běh
+  (klik otevře historii jobu, blízká selhání se slučují do `✕N`). Prázdno
+  znamená „nic nezaznamenáno“, ne „nefungovalo“ — historie nečinnosti
+  neexistuje. Běhy jsou z `cron/output` (stejné čtení prvních 4 KiB jako
+  sparkline, cache 60 s), incidenty z logů / `cron incidents`. Výpadky gateway
+  jsou z přechodů viděných **od spuštění dashboardu** (jen v paměti); když
+  gateway neběží teď, pás začíná posledním heartbeatem.
+- **Živé sparkline v hlavní kartě:** session a týdenní kvóta za posledních
+  24 h přímo v KPI (pulzující tečka = poslední vzorek), v kartě „tempo“
+  projekce měsíce denní tokeny / $ za 14 dní.
+- **Příkazová paleta** `Ctrl+K` / `⌘K` (funguje i z pole a z detailu, druhé
+  stisknutí zavře): skok na profil, cron job, incident, repo, panel, a akce —
+  obnovit data, okno grafu kvóty, tokeny ↔ $, paleta pro barvoslepé,
+  notifikace, restart gateway (pořád přes stejný `confirm()`). Bez dotazu
+  nabídne padající joby, kritické incidenty, agenty a časté akce.
+- **Notifikace v prohlížeči** (opt-in v nápovědě `?` nebo v paletě): upozorní
+  na **nový** incident úrovně kritické — ne na ty, které už byly vidět při
+  otevření stránky. Když je záložka aktivní, ukáže se jen toast ve stránce.
+  Dokud jsou zapnuté, skrytá záložka se ptá na `/api/state` jednou za 30 s.
+  Prohlížeč notifikace povolí jen v bezpečném kontextu (`http://127.0.0.1` /
+  `localhost`, ne `http://10.8.0.25`) — jinde je přepínač neaktivní
+  s vysvětlením. Volba je v `localStorage`, server nic neukládá.
+- **BMO na slabším hardwaru:** smyčka vykreslování se úplně zastaví ve skryté
+  záložce i když je BMO odscrollovaný (dřív běžel prázdný
+  `requestAnimationFrame`). Tři úrovně kvality (60 fps / 30 fps + pixel
+  ratio 1 + polovina částic / 20 fps + čtvrtina částic); když snímky ~3 s
+  nestíhají, sníží se úroveň. Zařízení s ≤ 4 jádry / ≤ 4 GB a
+  `prefers-reduced-motion` začínají na 30 fps (omezený pohyb navíc zklidní
+  třesení). `?bmo-quality=0|1|2` úroveň zafixuje, `window.__bmoPerf` ukáže
+  úroveň a fps.
+- **Čeština všude:** stavy, závažnosti, spojení, gateway, série tokenů
+  i celkový stav jdou přes jeden slovník (`static/lib.js`); dřív byl v UI mix
+  `connected` / `odpojeno`, `warning+` atd.
+- **Přístupnost:** jeden `h1`, odkaz „Přeskočit na obsah“, panely jako
+  pojmenované oblasti, pozadí za modalem je `inert`, přepínače mají
+  `aria-pressed`, grafy a stavové tečky textovou alternativu, bublina BMO a
+  toasty jsou live region. axe-core 4.10: 0 porušení na dashboardu i všech
+  detailech (předtím 91 prvků).
+- **Sjednocené styly:** karty, položky seznamů, rádiusy a nadpisy z kol 1–4
+  sdílí CSS proměnné (`--card-bg`, `--item-bg`, `--head-ls` …), stavové pilulky
+  v tabulkách mají jednu velikost.
+
 **Počet sub-agentů:** na hostu neexistuje zdroj pravdy pro živé sub-agenty.
 Dashboard ukazuje jen *odhad* — počet potomků procesu gateway (rekurzivně
 přes `/proc`), přiřazený k profilu podle `-p <profil>` / `profiles/<profil>/`
@@ -199,6 +248,7 @@ HTTP požadavky nikdy nečekají na pomalé CLI.
 | `GET /api/agent-log?profile=P&lines=300` | delší tail `agent.log` (max 2000 řádků) pro detail profilu |
 | `GET /api/cron/runs?profile=P&job=ID\|jméno&limit=50` | historie běhů jobu z `<home>/cron/output/<job_id>/*.md` (fallback: poslední běh z `jobs.json`) |
 | `GET /api/incidents?profile=P&level=warning\|error\|critical&hours=24..168` | chyby + incidenty až 7 dní zpět, filtr profilu a minimální závažnosti |
+| `GET /api/timeline?hours=6\|24\|72` | časová osa: per profil 96 úseků s nejhorším stavem, neúspěšné běhy, `gateway_down` intervaly |
 | `GET /api/compare?days=14` | profily vedle sebe: HP, chyby, cron (v chybě, po termínu, streak, nejdelší běh), tokeny, $ |
 | `GET /api/export?kind=usage\|tokens\|incidents\|compare&format=csv\|json` | stažení dat (`Content-Disposition: attachment`); `usage` bere `window`, `tokens`/`compare` `days`, `incidents` `profile`, `level`, `hours` |
 | `POST /api/restart` | `hermes gateway restart`, vrací `{ok, returncode, stdout, stderr, duration}` |
@@ -210,14 +260,25 @@ server.py                     entry point
 mission_control/parsing.py    čisté parsovací/agregační funkce (testované)
 mission_control/collectors.py čtení souborů, SQLite, /proc, CLI + cache
 mission_control/server.py     stdlib http.server, routing
-mission_control/static/       index.html, style.css, app.js (panely, grafy, zkratky), bmo.js (Three.js BMO),
+mission_control/static/       index.html, style.css, lib.js (čisté helpery + čeština, testované v node),
+                              app.js (panely, grafy, zkratky, paleta), bmo.js (Three.js BMO),
                               favicon.svg, icon-*.png, manifest.webmanifest, sw.js, offline.html
 tools/make_demo_home.py       generátor demo ~/.hermes stromu
-tests/                        unittest testy
+tools/ui_audit.js             headless audit (Playwright): JS chyby + přetečení na 375/768/1280/1920 px
+tests/                        unittest testy (+ tests/js/lib.test.js, spouští je unittest, když je node)
 ```
 
 ## Testy
 
 ```bash
 python3 -m unittest discover -s tests -t .
+```
+
+`tests/test_frontend.py` spustí i JS testy (`node tests/js/lib.test.js`) a
+`node --check` skriptů — bez nainstalovaného `node` se přeskočí. Vizuální
+audit v prohlížeči (vyžaduje Playwright, není potřeba pro běh):
+
+```bash
+python3 tools/make_demo_home.py /tmp/demo && HERMES_HOME=/tmp/demo python3 server.py --no-cli &
+node tools/ui_audit.js /tmp/shots   # CHROMIUM=…, THREE_JS=… když je CDN blokované
 ```
