@@ -22,6 +22,16 @@
   }
   applyPalette(getPalette());
 
+  var L = window.HMCLib;
+  function stLabel(s) { return L.label("status", s); }
+  function lvLabel(l) { return L.label("level", l); }
+  function statusPill(s) { return '<span class="pill pill-' + esc(s) + '">' + esc(stLabel(s)) + "</span>"; }
+  function connPill(a) {
+    return a.connected === true ? '<span class="pill pill-ok">' + L.CS.conn.connected + "</span>"
+      : a.connected === false ? '<span class="pill pill-error">' + L.CS.conn.disconnected + "</span>"
+        : '<span class="pill pill-unknown">' + (a.served === false ? L.CS.conn.unserved : L.CS.conn.na) + "</span>";
+  }
+
   var tzOffset = null; // host offset in seconds; null -> browser local
   var usageError = null, tokensError = null, lastForecast = null;
   var usageWindow = "24h";
@@ -93,7 +103,10 @@
   function platformTitle(p) {
     return (p.stale ? "gateway neběží — poslední známý stav: " : "") + p.state + (p.error ? " — " + p.error : "");
   }
-  function setConn(ok) { $("conn").className = "conn " + (ok ? "ok" : "err"); }
+  function setConn(ok) {
+    $("conn").className = "conn " + (ok ? "ok" : "err");
+    $("conn").setAttribute("aria-label", ok ? "spojení s backendem OK" : "spojení s backendem ztraceno");
+  }
 
   // Polling re-renders panels every few seconds. Replacing innerHTML blindly
   // collapsed opened <details>, reset scroll positions and made the UI blink,
@@ -128,7 +141,7 @@
     window.dispatchEvent(new CustomEvent("mc-state", { detail: st }));
     var sum = st.summary;
     document.body.setAttribute("data-level", sum.level);
-    pill($("overall-pill"), sum.level, { ok: "all systems nominal", warn: "warning", error: "alert" }[sum.level]);
+    pill($("overall-pill"), sum.level, L.label("overall", sum.level));
 
     var bubble = $("bubble");
     if (lastBubble !== sum.message) {
@@ -148,6 +161,7 @@
     $("kpi-procs").textContent = st.processes.estimate == null ? "N/A" : "~" + st.processes.estimate;
 
     updateFavicon(sum.level, sum.issues.length);
+    HMCNotify.check(st.incidents || []);
     renderRestarts(st.restarts || [], st.now);
     renderGateway(st.gateway, st.now);
     renderAgents(st.agents, st.now, st.processes);
@@ -157,13 +171,13 @@
 
   function renderGateway(gw, now) {
     pill($("gw-badge"), gw.running ? (gw.status === "warn" ? "warn" : "ok") : "error",
-      gw.available ? (gw.running ? "running" : "down") : "no data");
+      gw.available ? (gw.running ? L.CS.gateway.up : L.CS.gateway.down) : L.CS.gateway.nodata);
     var rows = [
       ["stav", gw.state],
       ["PID", gw.pid != null ? gw.pid + (gw.pid_alive === false ? " (mrtvý)" : "") : "–"],
-      ["uptime", gw.uptime_seconds != null ? fmtDur(gw.uptime_seconds) + (gw.started_at ? " (od " + fmtDateTime(gw.started_at) + ")" : "") : "–"],
-      ["heartbeat", gw.updated_at ? fmtDateTime(gw.updated_at) + " (" + rel(gw.updated_at, now) + ")" : "–"],
-      ["active agents", typeof gw.active_agents === "object" && gw.active_agents !== null ? JSON.stringify(gw.active_agents) : (gw.active_agents == null ? "–" : gw.active_agents)],
+      ["doba běhu", gw.uptime_seconds != null ? fmtDur(gw.uptime_seconds) + (gw.started_at ? " (od " + fmtDateTime(gw.started_at) + ")" : "") : "–"],
+      ["poslední tep", gw.updated_at ? fmtDateTime(gw.updated_at) + " (" + rel(gw.updated_at, now) + ")" : "–"],
+      ["aktivní agenti", typeof gw.active_agents === "object" && gw.active_agents !== null ? JSON.stringify(gw.active_agents) : (gw.active_agents == null ? "–" : gw.active_agents)],
       ["verze", (gw.code_version || "–") + (gw.code_sha ? " @ " + String(gw.code_sha).slice(0, 10) : "")]
     ];
     setHTML($("gw-kv"), rows.map(function (r) { return "<dt>" + esc(r[0]) + "</dt><dd>" + esc(r[1]) + "</dd>"; }).join(""));
@@ -180,7 +194,7 @@
       platformNames.forEach(function (n) {
         var p = plats.filter(function (x) { return x.profile === prof && x.platform === n; })[0];
         if (!p) { html += '<td><span class="muted">·</span></td>'; return; }
-        html += '<td title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span></td>';
+        html += '<td title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '" role="img" aria-label="' + esc(n + ": " + platformTitle(p)) + '"></span></td>';
       });
       html += "</tr>";
     });
@@ -192,24 +206,22 @@
       (procs.unattributed ? " Nepřiřazené procesy: " + procs.unattributed + "." : "");
     setHTML($("agents"), agents.map(function (a) {
       var cls = a.connected === true ? "ok" : (a.connected === false ? "error" : "");
-      var conn = a.connected === true ? '<span class="pill pill-ok">connected</span>'
-        : a.connected === false ? '<span class="pill pill-error">disconnected</span>'
-          : '<span class="pill pill-unknown">' + (a.served ? "n/a" : "not served") + "</span>";
+      var conn = connPill(a);
       var c = a.cron;
-      var counts = c.available ? Object.keys(c.counts).map(function (k) { return c.counts[k] + " " + k; }).join(", ") || "žádné joby" : "jobs.json chybí";
-      var lastRun = c.last_run_at ? rel(c.last_run_at, now) + (c.last_job ? " · " + c.last_job.name + " (" + c.last_job.status + ")" : "") : "–";
+      var counts = c.available ? Object.keys(c.counts).map(function (k) { return c.counts[k] + " " + stLabel(k); }).join(", ") || "žádné joby" : "jobs.json chybí";
+      var lastRun = c.last_run_at ? rel(c.last_run_at, now) + (c.last_job ? " · " + c.last_job.name + " (" + stLabel(c.last_job.status) + ")" : "") : "–";
       var nextRun = c.next_run_at ? rel(c.next_run_at, now) + (c.next_job ? " · " + c.next_job.name : "") : "–";
       var platforms = a.platforms.map(function (p) {
-        return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + "</span>";
+        return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '" role="img" aria-label="' + esc(platformTitle(p)) + '"></span> ' + esc(p.platform) + "</span>";
       }).join(" &nbsp;");
       return '<div class="agent ' + cls + (a.busy ? " busy" : "") + '">' +
         '<div class="agent-head"><a class="agent-name" href="' + agentHref(a.profile) + '" style="color:' + (PROFILE_COLORS[a.profile] || "inherit") + '">' + esc(a.label) + "</a>" +
         '<span class="agent-badges">' + healthBadge(a.health) + conn + "</span></div>" +
-        '<div class="agent-activity">' + (a.busy ? "⚡ " : "💤 ") + esc(a.activity) + "</div>" +
+        '<div class="agent-activity">' + (a.busy ? "⚡ " : "💤 ") + esc(L.activityLabel(a.activity)) + "</div>" +
         (platforms ? '<div class="agent-row"><span>platformy</span><span>' + platforms + "</span></div>" : "") +
         '<div class="agent-row"><span>cron</span><span>' + esc(counts) + "</span></div>" +
-        '<div class="agent-row"><span>poslední run</span><span>' + esc(lastRun) + "</span></div>" +
-        '<div class="agent-row"><span>další run</span><span>' + esc(nextRun) + "</span></div>" +
+        '<div class="agent-row"><span>poslední běh</span><span>' + esc(lastRun) + "</span></div>" +
+        '<div class="agent-row"><span>další běh</span><span>' + esc(nextRun) + "</span></div>" +
         '<div class="agent-row" title="' + esc(procTip) + '"><span>procesy ⓘ</span><span>' + (a.processes == null ? "N/A" : "~" + a.processes) + "</span></div>" +
         (a.log_tail && a.log_tail.length ? '<details data-key="log-' + esc(a.profile) + '"><summary class="muted">co dělal (agent.log)</summary><pre>' + esc(a.log_tail.join("\n")) + "</pre></details>" : "") +
         '<a class="link-more agent-more" href="' + agentHref(a.profile) + '">detail profilu ›</a>' +
@@ -222,7 +234,7 @@
     pill($("inc-count"), serious ? "error" : (list.length ? "warn" : "ok"), String(list.length));
     if (!list.length) { setHTML($("incidents"), '<li class="empty">Nic nehoří. 🔥🚫</li>'); return; }
     setHTML($("incidents"), list.slice(0, 100).map(function (i) {
-      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(i.level) + "</span>" +
+      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(lvLabel(i.level)) + "</span>" +
         "<span>" + esc(i.ts ? fmtDateTime(i.ts) + " (" + rel(i.ts, now) + ")" : "bez času") + "</span>" +
         (i.profile ? '<a href="#/incidents?profile=' + encodeURIComponent(i.profile) + '">' + esc(i.profile) + "</a>" : "") +
         "<span>" + esc(i.source || "") + "</span></div>" +
@@ -242,13 +254,13 @@
       var rows = c.jobs.map(function (j) {
         if (j.status === "error") failing++;
         return '<tr class="job-' + esc(j.status) + '"><td data-label="job"><a href="' + jobHref(c.profile, j) + '">' + esc(j.name) + "</a></td>" + '<td data-label="rozvrh" class="mono">' + esc(j.schedule || "–") + "</td>" +
-          '<td data-label="stav"><span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span></td>" +
-          '<td data-label="poslední" title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(j.last_status) : "") + "</td>" +
+          '<td data-label="stav">' + statusPill(j.status) + "</td>" +
+          '<td data-label="poslední" title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(stLabel(j.last_status)) : "") + "</td>" +
           '<td data-label="další" title="' + esc(fmtDateTime(j.next_run_at)) + '">' + esc(j.enabled ? rel(j.next_run_at, now) : "–") + "</td>" +
           '<td data-label="běhy"><span class="runs-cell">' + sparkHTML(j.recent) + (j.failure_streak > 0 ? '<span class="streak">' + j.failure_streak + "×</span>" : '<span class="muted">0</span>') + "</span></td></tr>";
       }).join("");
       return '<div class="cron-profile"><h4><a href="' + agentHref(c.profile) + '" style="color:' + (PROFILE_COLORS[c.profile] || "inherit") + '">' + esc(c.profile) + "</a><span class=\"muted\">" + c.jobs.length + " jobů</span></h4>" +
-        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th title=\"posledních až 12 běhů (výška = délka běhu, odhad) a failure streak\">běhy</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
+        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th title=\"posledních až 12 běhů (výška = délka běhu, odhad) a počet chyb v řadě\">běhy</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
         "</div>";
     }).join(""));
     $("cron-meta").textContent = total + " jobů celkem" + (failing ? " · " + failing + " v chybě" : "");
@@ -262,7 +274,7 @@
     runs.forEach(function (r) { if (r.duration > maxD) maxD = r.duration; if (r.status === "error") failed++; });
     return '<span class="spark" role="img" aria-label="' + runs.length + " posledních běhů, " + failed + ' chyb">' + runs.map(function (r) {
       var h = r.duration != null && maxD > 0 ? 5 + Math.round(11 * r.duration / maxD) : 16;
-      var tip = fmtDateTime(r.ts) + " · " + r.status + (r.duration != null ? " · ~" + fmtDur(r.duration) : "");
+      var tip = fmtDateTime(r.ts) + " · " + stLabel(r.status) + (r.duration != null ? " · ~" + fmtDur(r.duration) : "");
       return '<span class="spark-bar ' + esc(r.status) + '" style="height:' + h + 'px" title="' + esc(tip) + '"></span>';
     }).join("") + "</span>";
   }
@@ -317,6 +329,58 @@
     document.title = (titleIssues ? "(" + titleIssues + ") " : "") + (modalTitle ? modalTitle + " · " : "") + "Hermes Mission Control";
   }
 
+  // ---------------------------------------------------------------- toast + notifications
+  var toastTimer = null;
+  function toast(html, ms) {
+    var el = $("toast");
+    el.innerHTML = html; el.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.add("hidden"); }, ms || 6000);
+  }
+  // Opt-in browser notifications for NEW critical incidents. Purely client
+  // side: the set of already seen incidents lives in memory, the on/off
+  // choice in localStorage (like the palette). While enabled, a hidden tab
+  // still polls /api/state every 30 s so the notification can fire.
+  var NOTIFY_KEY = "hmc-notify";
+  var HMCNotify = (function () {
+    var seen = { keys: {}, primed: false };
+    function pref() { try { return localStorage.getItem(NOTIFY_KEY) === "1"; } catch (e) { return false; } }
+    function store(on) { try { localStorage.setItem(NOTIFY_KEY, on ? "1" : "0"); } catch (e) { /* this page only */ } }
+    function supported() { return "Notification" in window && window.isSecureContext; }
+    function enabled() { return supported() && Notification.permission === "granted" && pref(); }
+    function sync() {
+      Array.prototype.forEach.call(document.querySelectorAll("#d-notify button"), function (x) {
+        var on = (x.getAttribute("data-n") === "1") === enabled();
+        x.classList.toggle("active", on); x.setAttribute("aria-pressed", String(on));
+      });
+    }
+    function enable() {
+      if (!supported()) { toast("Notifikace tu nejdou — prohlížeč je povolí jen na https nebo http://127.0.0.1 / localhost."); return; }
+      Notification.requestPermission().then(function (p) {
+        if (p === "granted") { store(true); toast("🔔 Notifikace zapnuté — ozvu se při novém kritickém incidentu."); }
+        else { store(false); toast("Prohlížeč notifikace zablokoval (" + esc(p) + "). Povolíš je v nastavení stránky."); }
+        sync();
+      });
+    }
+    function disable() { store(false); toast("🔕 Notifikace vypnuté."); sync(); }
+    function check(incidents) {
+      var fresh = L.newCriticals(seen, incidents);
+      if (!fresh.length || !enabled()) return;
+      var first = fresh[0];
+      var title = fresh.length > 1 ? "Hermes: " + fresh.length + " nové kritické incidenty" : "Hermes: kritický incident" + (first.profile ? " · " + first.profile : "");
+      var href = incidentsHash({ profile: fresh.length > 1 ? "" : (first.profile || ""), level: "critical" });
+      if (!document.hidden && document.hasFocus()) { // looking at the page already: in-page toast is enough
+        toast("⚠ " + esc(title) + ' — <a href="' + href + '">zobrazit ›</a>', 10000);
+        return;
+      }
+      try {
+        var n = new Notification(title, { body: first.message, tag: "hmc-critical", icon: "/icon-192.png" });
+        n.onclick = function () { window.focus(); navigate(href); n.close(); };
+      } catch (e) { /* e.g. Android Chrome needs a SW notification; the toast is shown next time */ }
+    }
+    return { supported: supported, enabled: enabled, enable: enable, disable: disable, check: check, sync: sync };
+  })();
+
   // "updated Xs ago" next to the clock; turns amber/red when polls fail
   function tickUpdated() {
     var el = $("updated");
@@ -354,6 +418,16 @@
     $("kpi-session-eta").textContent = fc ? short(fc.session) : "";
     $("kpi-week-eta").textContent = fc ? short(fc.week) : "";
   }
+  function dailySparkHTML(fmt) {
+    if (!lastTokens || !lastTokens.day_keys) return "";
+    var days = lastTokens.day_keys, avail = lastTokens.profiles.filter(function (p) { return p.available; });
+    var vals = days.map(function (d) { return avail.reduce(function (s, p) { return s + dayValue(p.days[d]); }, 0); });
+    var max = Math.max.apply(null, vals.concat([0]));
+    if (max <= 0) return "";
+    return '<div class="day-spark" role="img" aria-label="Denní ' + (tokenMode === "cost" ? "náklady" : "tokeny") + " za " + days.length + ' dní">' + vals.map(function (v, i) {
+      return '<span style="height:' + Math.max(4, Math.round(100 * v / max)) + '%" title="' + esc(days[i] + " · " + fmt(v)) + '"></span>';
+    }).join("") + "</div>";
+  }
   var MONTHS_CS = ["leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
   function renderForecast() {
     var f = lastForecast, el = $("forecast");
@@ -371,7 +445,7 @@
     setHTML(el,
       '<div class="fc-cards">' +
       '<div class="fc"><div class="kpi-label">' + esc(month) + " dosud</div><div class=\"fc-val\">" + fmt(m.month_to_date) + '</div><div class="kpi-sub">' + m.day + ". z " + m.days_in_month + " dní</div></div>" +
-      '<div class="fc"><div class="kpi-label">tempo</div><div class="fc-val">' + fmt(m.rate_per_day) + '<span class="muted small">/den</span></div><div class="kpi-sub">průměr 7 dní</div></div>' +
+      '<div class="fc"><div class="kpi-label">tempo</div><div class="fc-val">' + fmt(m.rate_per_day) + '<span class="muted small">/den</span></div><div class="kpi-sub">průměr 7 dní</div>' + dailySparkHTML(fmt) + "</div>" +
       '<div class="fc fc-main"><div class="kpi-label">projekce do konce měsíce</div><div class="fc-val">≈ ' + fmt(m.projected) + "</div>" +
       '<div class="kpi-sub">' + (m.prev_month ? "minulý měsíc " + (m.prev_partial ? "≥ " : "") + fmt(m.prev_month) + (m.prev_partial ? " (neúplná data)" : "") + (delta != null ? ' · <span class="' + (delta > 0 ? "up" : "down") + '">' + (delta > 0 ? "+" : "") + delta + " %</span>" : "") : "bez dat za minulý měsíc") + "</div></div>" +
       "</div>" +
@@ -398,6 +472,72 @@
         "</li>";
     }).join(""));
   }
+
+  // ---------------------------------------------------------------- timeline
+  // All profiles on one time axis (Gantt-like): coloured segments = worst
+  // state per 15-min bucket, ✕ = failed run (link to the job), hatched band
+  // = gateway down. Data from /api/timeline, polled like the slow panels.
+  var tlHours = "24", lastTimeline = null;
+  var TL_STATE = { ok: "běh ok", warning: "varování", error: "chyba", critical: "kritické" };
+  function tlTime(ts, long) { return long ? fmtDateTime(ts) : fmtTime(ts); }
+  function tlTicks(d) {
+    var step = { 6: 3600, 24: 3 * 3600, 72: 12 * 3600 }[d.hours] || 3 * 3600;
+    var off = tzOffset != null ? tzOffset : -new Date().getTimezoneOffset() * 60;
+    var out = [], span = d.end - d.start;
+    for (var t = Math.ceil((d.start + off) / step) * step - off; t < d.end - span * 0.07; t += step) {
+      out.push('<span class="tl-tick" style="left:' + ((t - d.start) / span * 100).toFixed(2) + '%">' + esc(d.hours > 24 ? fmtDateTime(t).replace(/ /, "\u00a0") : fmtTime(t)) + "</span>");
+    }
+    return out.join("") + '<span class="tl-tick tl-now">teď</span>';
+  }
+  function renderTimeline(d) {
+    lastTimeline = d;
+    if (d.error) { setHTML($("timeline"), '<div class="empty error-inline">⚠ Časovou osu nelze načíst (' + esc(d.error) + ").</div>"); return; }
+    var span = d.end - d.start, long = d.hours > 24, pct = function (t) { return ((t - d.start) / span * 100).toFixed(2); };
+    var down = (d.gateway_down || []).map(function (g) {
+      return '<span class="tl-down" style="left:' + pct(g.start) + "%;width:" + Math.max(0.3, (g.end - g.start) / span * 100).toFixed(2) + '%" title="' +
+        esc("gateway neběžel " + tlTime(g.start, long) + "–" + (g.open ? "teď" : tlTime(g.end, long))) + '"></span>';
+    }).join("");
+    var rows = d.profiles.map(function (p) {
+      var n = p.buckets.length, segs = L.mergeBuckets(p.buckets).filter(function (s) { return s.state !== "none"; });
+      var inc = p.incidents, sum = p.runs + " běhů · " + p.failed.length + " neúspěšných · " + (inc.critical + inc.error) + " chyb · " + inc.warning + " varování";
+      var track = segs.map(function (s) {
+        var t0 = d.start + s.start * d.bucket_seconds, t1 = d.start + s.end * d.bucket_seconds;
+        return '<span class="tl-seg s-' + esc(s.state) + '" style="left:' + (s.start / n * 100).toFixed(2) + "%;width:" + ((s.end - s.start) / n * 100).toFixed(2) + '%" title="' +
+          esc(tlTime(t0, long) + "–" + tlTime(t1, long) + " · " + (TL_STATE[s.state] || s.state)) + '"></span>';
+      }).join("") + L.clusterByPosition(p.failed.map(function (r) {
+        return { pos: +pct(Math.max(r.ts, d.start)), run: r };
+      }), 1.5).map(function (c) {
+        var runs = c.items.map(function (x) { return x.run; }), r = runs[0];
+        var sameJob = runs.every(function (x) { return x.job === r.job; });
+        var tip = runs.length === 1 ? r.job + " selhal " + fmtDateTime(r.ts) + (r.duration != null ? " · ~" + fmtDur(r.duration) : "")
+          : runs.length + " selhání: " + runs.map(function (x) { return x.job + " " + tlTime(x.ts, long); }).join(", ");
+        // one job -> its run history, several jobs -> the profile detail
+        var href = sameJob ? jobHref(p.profile, { id: r.job_id, name: r.job }) : agentHref(p.profile);
+        return '<a class="tl-mark" href="' + href + '" style="left:' + c.pos.toFixed(2) + '%" title="' + esc(tip) + '" aria-label="' + esc(tip) + '">✕' +
+          (runs.length > 1 ? "<sub>" + runs.length + "</sub>" : "") + "</a>";
+      }).join("");
+      return '<div class="tl-row"><a class="tl-label" href="' + agentHref(p.profile) + '" style="color:' + (PROFILE_COLORS[p.profile] || "inherit") + '" title="' + esc(sum) + '">' + esc(p.profile === "default" ? "BMO" : p.profile) + "</a>" +
+        '<div class="tl-track" role="group" aria-label="' + esc(profileLabel(p.profile) + ", posledních " + d.hours + " h: " + sum) + '">' + down + track + "</div>" +
+        '<span class="tl-stat muted small">' + p.runs + " běhů" + (p.failed.length ? ' · <span class="streak">' + p.failed.length + "✕</span>" : "") + "</span></div>";
+    }).join("");
+    setHTML($("timeline"), rows + '<div class="tl-row tl-axis" aria-hidden="true"><span></span><div class="tl-ticks">' + tlTicks(d) + "</div><span></span></div>");
+    $("tl-span").textContent = "(" + (d.hours > 24 ? d.hours / 24 + " dny" : d.hours + " h") + ")";
+  }
+  function fetchTimeline() {
+    var h = tlHours;
+    return getJSON("/api/timeline?hours=" + h).then(function (d) { if (h === tlHours) renderTimeline(d); })
+      .catch(function (e) { if (h === tlHours) renderTimeline({ error: e.message }); });
+  }
+  var pollTimeline = guarded(fetchTimeline);
+  Array.prototype.forEach.call(document.querySelectorAll("#tl-hours button"), function (b) {
+    b.addEventListener("click", function () {
+      tlHours = b.getAttribute("data-h");
+      Array.prototype.forEach.call(document.querySelectorAll("#tl-hours button"), function (x) {
+        x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", String(x === b));
+      });
+      fetchTimeline();
+    });
+  });
 
   // ---------------------------------------------------------------- canvas helpers
   function setupCanvas(canvas) {
@@ -476,6 +616,9 @@
     line("week_pct", css("--magenta"));
     line("session_pct", css("--cyan"));
     usageGeom = { X: X, Y: Y, pts: pts, pad: pad, ph: ph };
+    var lastPt = pts[pts.length - 1];
+    $("usage-chart").setAttribute("aria-label", "Graf Claude kvóty, okno " + data.window + ", " + pts.length + " vzorků. Poslední " + fmtDateTime(lastPt.ts) +
+      ": session " + (lastPt.session_pct == null ? "–" : Math.round(lastPt.session_pct) + " %") + ", týden " + (lastPt.week_pct == null ? "–" : Math.round(lastPt.week_pct) + " %") + ".");
 
     if (hoverX != null) {
       var best = null;
@@ -508,6 +651,7 @@
     return getJSON("/api/usage?window=" + encodeURIComponent(w)).then(function (d) {
       if (w !== usageWindow) return;
       lastUsage = d; usageError = null; if (d.tz) tzOffset = d.tz.offset_seconds;
+      if (w === "24h") { spark24 = d; renderQuotaSparks(); }
       var meta = d.available ? d.count + " vzorků" : "";
       if (d.latest) meta += " · poslední " + fmtDateTime(d.latest.ts) +
         (d.latest.session_reset ? " · reset session " + d.latest.session_reset : "");
@@ -517,6 +661,35 @@
     }).catch(function (e) { if (w === usageWindow) { usageError = e.message; drawUsage(lastUsage); } });
   }
   var pollUsage = guarded(fetchUsage);
+
+  // Hero KPI sparklines: always the last 24 h (own request only when the big
+  // chart shows another window), a pulsing dot marks the newest sample.
+  var spark24 = null, sparkDrawn = {};
+  var pollSpark = guarded(function () {
+    if (usageWindow === "24h") return null;
+    return getJSON("/api/usage?window=24h").then(function (d) { spark24 = d; renderQuotaSparks(); }, function () {});
+  });
+  function quotaSparkHTML(points, key, label) {
+    var t1 = Date.now() / 1000, t0 = t1 - 86400;
+    var r = L.sparkPaths(points, key, 100, 30, t0, t1);
+    if (!r.last) return "";
+    return '<svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">' +
+      '<line x1="0" y1="0.5" x2="100" y2="0.5" class="ks-max" vector-effect="non-scaling-stroke"/>' +
+      r.paths.map(function (p) { return '<polyline points="' + p + '" vector-effect="non-scaling-stroke" pathLength="100"/>'; }).join("") +
+      "</svg>" + '<span class="ks-dot" style="left:' + r.last.x.toFixed(1) + "%;top:" + (r.last.y / 30 * 100).toFixed(1) + '%" title="' +
+      esc(label + " " + Math.round(r.last.v) + " %") + '"></span>';
+  }
+  function renderQuotaSparks() {
+    var pts = (spark24 && spark24.points) || [];
+    [["kpi-session-spark", "session_pct", "session"], ["kpi-week-spark", "week_pct", "týden"]].forEach(function (k) {
+      var el = $(k[0]);
+      // the line draws itself in once; later polls only update it in place
+      if (setHTML(el, quotaSparkHTML(pts, k[1], k[2])) && !sparkDrawn[k[0]] && el.firstChild) {
+        sparkDrawn[k[0]] = true; el.classList.add("draw-in");
+        setTimeout(function () { el.classList.remove("draw-in"); }, 1400);
+      }
+    });
+  }
   Array.prototype.forEach.call(document.querySelectorAll("#usage-windows button"), function (b) {
     b.addEventListener("click", function () {
       usageWindow = b.getAttribute("data-w");
@@ -593,6 +766,8 @@
       }
     });
     tokenGeom = { pad: pad, bw: bw, days: days, stacks: stacks };
+    $("token-chart").setAttribute("aria-label", (tokenMode === "cost" ? "Náklady" : "Tokeny") + " podle profilu za " + days.length + " dní: " +
+      avail.map(function (p) { var v = dayValue(p.totals); return p.profile + " " + (tokenMode === "cost" ? "$" + v.toFixed(2) : fmtNum(v)); }).join(", ") + ".");
     if (hoverX != null) {
       var di = Math.floor((hoverX - pad.l) / bw);
       if (di >= 0 && di < days.length) {
@@ -620,6 +795,22 @@
       drawTokens(lastTokens); renderForecast();
     });
   });
+
+  // Toggle buttons (.seg) everywhere, including detail views rendered later:
+  // aria-pressed mirrors the .active class, so state is not colour-only.
+  function syncPressed(root) {
+    Array.prototype.forEach.call((root.querySelectorAll ? root : document).querySelectorAll(".seg button"), function (b) {
+      if (!b.getAttribute("type")) b.setAttribute("type", "button");
+      b.setAttribute("aria-pressed", String(b.classList.contains("active")));
+    });
+  }
+  syncPressed(document);
+  new MutationObserver(function (muts) {
+    muts.forEach(function (m) {
+      if (m.type === "attributes") { if (m.target.matches && m.target.matches(".seg button")) m.target.setAttribute("aria-pressed", String(m.target.classList.contains("active"))); }
+      else if (m.addedNodes.length && m.target.querySelectorAll) syncPressed(m.target);
+    });
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] });
 
   // ---------------------------------------------------------------- polling
   // At most one request per endpoint in flight (a slow backend must not pile
@@ -694,12 +885,21 @@
     return "#/incidents" + (q.length ? "?" + q.join("&") : "");
   }
 
+  // Everything behind the dialog is inert (no focus, no screen reader
+  // browsing); the Tab trap below stays as a fallback for older browsers.
+  function setBackgroundInert(on) {
+    Array.prototype.forEach.call(document.querySelectorAll("body > header, body > main, body > footer, body > .skip-link"), function (el) {
+      if (on) el.setAttribute("inert", ""); else el.removeAttribute("inert");
+      if (on) el.setAttribute("aria-hidden", "true"); else el.removeAttribute("aria-hidden");
+    });
+  }
   function openModal() {
     if (modal.open) return;
     modal.open = true;
     modal.lastFocus = document.activeElement;
     $("modal").classList.remove("hidden");
     document.body.classList.add("modal-open");
+    setBackgroundInert(true);
     var close = document.querySelector("#modal .modal-head [data-close]");
     if (close) close.focus();
   }
@@ -708,6 +908,7 @@
     modal.open = false; modal.route = null; modal.chart = null;
     $("modal").classList.add("hidden");
     document.body.classList.remove("modal-open");
+    setBackgroundInert(false);
     $("modal-body").innerHTML = "";
     if (modal.lastFocus && modal.lastFocus.focus) modal.lastFocus.focus();
   }
@@ -778,7 +979,7 @@
   function incidentItems(list, now) {
     if (!list.length) return '<li class="empty">Žádné záznamy pro zvolený filtr.</li>';
     return list.map(function (i) {
-      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(i.level) + "</span>" +
+      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(lvLabel(i.level)) + "</span>" +
         "<span>" + esc(i.ts ? fmtDateTime(i.ts) + " (" + rel(i.ts, now) + ")" : "bez času") + "</span>" +
         (i.profile ? '<a href="#/incidents?profile=' + encodeURIComponent(i.profile) + '">' + esc(i.profile) + "</a>" : "") +
         "<span>" + esc(i.source || "") + "</span></div>" +
@@ -845,7 +1046,7 @@
       empty: entry.available ? "Žádná spotřeba v tomto období" : (entry.error ? "Chyba state.db: " + entry.error : "state.db nenalezen"),
       series: keys.map(function (k, i) {
         return {
-          name: k === "cost" ? "náklady" : k.replace(/_tokens?$/, "").replace(/_/g, " "),
+          name: L.tokenSeriesName(k),
           color: TOKEN_SERIES_COLORS[i % TOKEN_SERIES_COLORS.length],
           values: days.map(function (d) {
             var b = entry.days[d];
@@ -875,17 +1076,16 @@
       setModalHead(crumbHome() + " › agenti", (a.label === "BMO" ? "BMO · default" : a.label));
       var cron = (st.cron || []).filter(function (c) { return c.profile === r.profile; })[0] || { jobs: [] };
       var procs = ((st.processes && st.processes.list) || []).filter(function (x) { return x.profile === r.profile; });
-      var conn = a.connected === true ? '<span class="pill pill-ok">connected</span>'
-        : a.connected === false ? '<span class="pill pill-error">disconnected</span>' : '<span class="pill pill-unknown">n/a</span>';
+      var conn = connPill(a);
       var html = '<div class="detail-grid">' +
-        '<section class="detail-card"><h4>Stav</h4><dl class="kv">' +
+        '<section class="detail-card"><h3>Stav</h3><dl class="kv">' +
         "<dt>spojení</dt><dd>" + conn + "</dd>" +
-        "<dt>teď</dt><dd>" + (a.busy ? "⚡ " : "💤 ") + esc(a.activity) + "</dd>" +
+        "<dt>teď</dt><dd>" + (a.busy ? "⚡ " : "💤 ") + esc(L.activityLabel(a.activity)) + "</dd>" +
         "<dt>platformy</dt><dd>" + (a.platforms.length ? a.platforms.map(function (p) {
           return '<span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + ' <span class="muted">' + esc(platformTitle(p)) + "</span>";
         }).join("<br>") : '<span class="muted">žádné</span>') + "</dd>" +
         '<dt title="Odhad podle child procesů gateway PID">procesy ⓘ</dt><dd>' + (a.processes == null ? "N/A" : "~" + a.processes) + "</dd>" +
-        (a.health ? "<dt>health</dt><dd>" + healthBadge(a.health) + (a.health.factors.length ? '<ul class="health-factors">' + a.health.factors.map(function (f) {
+        (a.health ? "<dt>zdraví</dt><dd>" + healthBadge(a.health) + (a.health.factors.length ? '<ul class="health-factors">' + a.health.factors.map(function (f) {
           return "<li>" + esc(f.label) + ' <span class="muted">−' + f.penalty + "</span></li>";
         }).join("") + "</ul>" : ' <span class="muted">bez problémů</span>') + "</dd>" : "") +
         "</dl>" +
@@ -893,24 +1093,24 @@
           return "<tr><td class=\"mono\">" + esc(x.pid) + "</td><td>" + esc(fmtDur(x.elapsed)) + '</td><td class="mono cmd">' + esc(x.cmd) + "</td></tr>";
         }).join("") + "</table></div>" : "") +
         "</section>" +
-        '<section class="detail-card"><h4>Cron joby <span class="muted small">(' + cron.jobs.length + ")</span></h4>" +
+        '<section class="detail-card"><h3>Cron joby <span class="muted small">(' + cron.jobs.length + ")</span></h3>" +
         (cron.available === false ? '<div class="empty">jobs.json nenalezen</div>' : cron.jobs.length ? '<ul class="job-list">' + cron.jobs.map(function (j) {
-          return '<li><a href="' + jobHref(r.profile, j) + '">' + esc(j.name) + '</a> <span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span>" +
+          return '<li><a href="' + jobHref(r.profile, j) + '">' + esc(j.name) + "</a> " + statusPill(j.status) +
             '<span class="muted small">' + esc(j.schedule || "") + " · poslední " + esc(rel(j.last_run_at, st.now)) + (j.failure_streak ? ' · <span class="streak">' + j.failure_streak + "×</span>" : "") + "</span>" + sparkHTML(j.recent) + "</li>";
         }).join("") + "</ul>" : '<div class="empty">žádné joby</div>') +
         "</section></div>" +
-        '<section class="detail-card"><div class="panel-head"><h4>Tokeny / náklady <span class="muted small">(state.db, 30 dní)</span></h4>' +
+        '<section class="detail-card"><div class="panel-head"><h3>Tokeny / náklady <span class="muted small">(state.db, 30 dní)</span></h3>' +
         '<div class="seg" id="d-token-mode"><button data-m="tokens" class="active">tokeny</button><button data-m="cost">$</button></div></div>' +
         '<div class="legend" id="d-token-legend"></div>' +
         '<div class="chart-wrap short"><canvas id="d-token-chart"></canvas><div id="d-token-tip" class="tip hidden"></div></div></section>' +
-        '<section class="detail-card"><div class="panel-head"><h4>Incidenty <span class="muted small">(7 dní)</span></h4>' +
+        '<section class="detail-card"><div class="panel-head"><h3>Incidenty <span class="muted small">(7 dní)</span></h3>' +
         '<a class="link-more" href="' + incidentsHash({ profile: r.profile, hours: "168" }) + '">filtrovat ›</a></div>' +
         '<ul class="incidents" id="d-incidents"><li class="empty loading">Načítám…</li></ul></section>' +
-        '<section class="detail-card"><div class="panel-head"><h4>agent.log</h4><div class="filters">' +
+        '<section class="detail-card"><div class="panel-head"><h3>agent.log</h3><div class="filters">' +
         '<select id="d-log-lines" aria-label="počet řádků"><option value="100">100 řádků</option><option value="300" selected>300 řádků</option><option value="1000">1000 řádků</option></select>' +
-        '<select id="d-log-level" aria-label="závažnost"><option value="">vše</option><option value="warning">warning+</option><option value="error">error+</option></select>' +
+        '<select id="d-log-level" aria-label="závažnost"><option value="">vše</option><option value="warning">varování+</option><option value="error">chyba+</option></select>' +
         '<input id="d-log-q" type="search" placeholder="hledat…" aria-label="hledat v logu"></div></div>' +
-        '<pre class="log-view" id="d-log"><span class="muted">Načítám…</span></pre><div class="muted small" id="d-log-meta"></div></section>';
+        '<pre class="log-view" id="d-log" tabindex="0" aria-label="agent.log"><span class="muted">Načítám…</span></pre><div class="muted small" id="d-log-meta"></div></section>';
       $("modal-body").innerHTML = html;
 
       // tokens
@@ -980,19 +1180,19 @@
       var j = d.job, now = Date.now() / 1000;
       setModalHead(crumbHome() + ' › <a href="' + agentHref(r.profile) + '">' + esc(profileLabel(r.profile)) + "</a> › cron", j.name);
       var strip = d.runs.slice().reverse().map(function (x) {
-        return '<span class="run-dot ' + esc(x.status) + '" title="' + esc(fmtDateTime(x.ts) + " · " + x.status) + '"></span>';
+        return '<span class="run-dot ' + esc(x.status) + '" title="' + esc(fmtDateTime(x.ts) + " · " + stLabel(x.status)) + '"></span>';
       }).join("");
       var html = '<div class="detail-grid">' +
-        '<section class="detail-card"><h4>Job</h4><dl class="kv">' +
-        "<dt>stav</dt><dd><span class=\"pill pill-" + esc(j.status) + "\">" + esc(j.status) + "</span>" + (j.enabled ? "" : ' <span class="muted">(vypnutý)</span>') + "</dd>" +
+        '<section class="detail-card"><h3>Job</h3><dl class="kv">' +
+        "<dt>stav</dt><dd>" + statusPill(j.status) + (j.enabled ? "" : ' <span class="muted">(vypnutý)</span>') + "</dd>" +
         "<dt>id</dt><dd class=\"mono\">" + esc(j.id || "–") + "</dd>" +
         "<dt>rozvrh</dt><dd class=\"mono\">" + esc(j.schedule || "–") + "</dd>" +
-        "<dt>poslední run</dt><dd>" + esc(fmtDateTime(j.last_run_at)) + " (" + esc(rel(j.last_run_at, now)) + ")" + (j.last_status ? " · " + esc(j.last_status) : "") + "</dd>" +
-        "<dt>další run</dt><dd>" + esc(j.enabled ? fmtDateTime(j.next_run_at) + " (" + rel(j.next_run_at, now) + ")" : "–") + "</dd>" +
-        "<dt>failure streak</dt><dd>" + (j.failure_streak ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</dd>" +
+        "<dt>poslední běh</dt><dd>" + esc(fmtDateTime(j.last_run_at)) + " (" + esc(rel(j.last_run_at, now)) + ")" + (j.last_status ? " · " + esc(stLabel(j.last_status)) : "") + "</dd>" +
+        "<dt>další běh</dt><dd>" + esc(j.enabled ? fmtDateTime(j.next_run_at) + " (" + rel(j.next_run_at, now) + ")" : "–") + "</dd>" +
+        "<dt>chyb v řadě</dt><dd>" + (j.failure_streak ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</dd>" +
         (j.last_error ? '<dt>poslední chyba</dt><dd class="repo-err-full">' + esc(j.last_error) + "</dd>" : "") +
         "</dl></section>" +
-        '<section class="detail-card"><h4>Statistika <span class="muted small">(posledních ' + d.count + " běhů)</span></h4>" +
+        '<section class="detail-card"><h3>Statistika <span class="muted small">(posledních ' + d.count + " běhů)</span></h3>" +
         '<div class="kpis kpis-3">' +
         '<div class="kpi"><div class="kpi-label">úspěšnost</div><div class="kpi-value">' + (d.success_rate == null ? "–" : Math.round(d.success_rate * 100) + " %") + "</div></div>" +
         '<div class="kpi"><div class="kpi-label">selhání</div><div class="kpi-value"' + (d.failed ? ' style="color:var(--err)"' : "") + ">" + d.failed + "</div></div>" +
@@ -1001,7 +1201,7 @@
         '<div class="muted small">zdroj: ' + esc(d.source || "žádná historie") +
         (d.source === "cron/jobs.json" ? " — adresář cron/output pro tento job neexistuje, známe jen poslední běh" : " — stav běhu odhadnut z obsahu výstupu") + "</div>" +
         "</section></div>" +
-        '<section class="detail-card"><div class="panel-head"><h4>Historie běhů</h4><div class="seg" id="d-run-filter">' +
+        '<section class="detail-card"><div class="panel-head"><h3>Historie běhů</h3><div class="seg" id="d-run-filter">' +
         '<button data-f="" class="active">vše</button><button data-f="error">jen chyby</button></div></div>' +
         '<ul class="runs" id="d-runs"></ul></section>';
       $("modal-body").innerHTML = html;
@@ -1009,7 +1209,7 @@
       var renderRuns = function () {
         var list = d.runs.filter(function (x) { return !filter || x.status === filter; });
         $("d-runs").innerHTML = list.length ? list.map(function (x) {
-          return '<li class="run ' + esc(x.status) + '"><div class="run-head"><span class="pill pill-' + esc(x.status) + '">' + esc(x.status) + "</span>" +
+          return '<li class="run ' + esc(x.status) + '"><div class="run-head">' + statusPill(x.status) +
             "<span>" + esc(fmtDateTime(x.ts)) + ' <span class="muted">(' + esc(rel(x.ts, now)) + ")</span></span>" +
             (x.file ? '<span class="muted small mono">' + esc(x.file) + "</span>" : "") + "</div>" +
             (x.preview ? "<details" + (x.status === "error" ? " open" : "") + '><summary class="muted small">výstup</summary><pre>' + esc(x.preview) + (x.truncated ? "\n…" : "") + "</pre></details>" : "") +
@@ -1037,7 +1237,7 @@
         return '<option value="' + esc(p) + '"' + (p === r.profile ? " selected" : "") + ">" + esc(profileLabel(p)) + "</option>";
       }).join("") + "</select></label>" +
       '<div class="seg" id="d-inc-level" role="group" aria-label="minimální závažnost">' + ["", "warning", "error", "critical"].map(function (l) {
-        return '<button data-l="' + l + '"' + (l === r.level ? ' class="active"' : "") + ">" + (!l ? "vše" : l === "critical" ? l : l + "+") + "</button>";
+        return '<button data-l="' + l + '"' + (l === r.level ? ' class="active"' : "") + ">" + (!l ? "vše" : l === "critical" ? lvLabel(l) : lvLabel(l) + "+") + "</button>";
       }).join("") + "</div>" +
       '<div class="seg" id="d-inc-hours" role="group" aria-label="období">' + [["24", "24h"], ["72", "3d"], ["168", "7d"]].map(function (h) {
         return '<button data-h="' + h[0] + '"' + (h[0] === r.hours ? ' class="active"' : "") + ">" + h[1] + "</button>";
@@ -1071,7 +1271,7 @@
       $("d-inc-list").innerHTML = incidentItems(list.slice(0, 500), data.now) +
         (list.length > 500 ? '<li class="muted small">Zobrazeno prvních 500 z ' + list.length + " — zpřesni filtr.</li>" : "");
       $("d-inc-counts").innerHTML = LEVELS.slice().reverse().map(function (l) {
-        return '<span class="cnt ' + l + '">' + l + " " + (data.counts[l] || 0) + "</span>";
+        return '<span class="cnt ' + l + '">' + lvLabel(l) + " " + (data.counts[l] || 0) + "</span>";
       }).join("") + '<span class="muted small">zobrazeno ' + Math.min(list.length, 500) + " z " + data.incidents.length +
         (data.incidents.length < data.total ? " (" + data.total + " bez filtru závažnosti)" : "") + "</span>";
     };
@@ -1091,9 +1291,9 @@
   // worst: "max" = highest value is the notable one, "min" = lowest is.
   var COMPARE_COLS = [
     ["health", "HP", function (v, r) { return healthBadge({ score: v, level: r.health_level, factors: [] }); }, "min"],
-    ["connected", "spojení", function (v) { return v === true ? '<span class="cell ok"></span>' : v === false ? '<span class="cell error"></span>' : '<span class="cell unknown"></span>'; }, null],
+    ["connected", "spojení", function (v) { return '<span class="cell ' + (v === true ? "ok" : v === false ? "error" : "unknown") + '" role="img" aria-label="' + (v === true ? L.CS.conn.connected : v === false ? L.CS.conn.disconnected : L.CS.conn.na) + '"></span>'; }, null],
     ["errors_24h", "chyby 24h", function (v, r) { return String(v + r.critical_24h) + (r.critical_24h ? ' <span class="muted">(' + r.critical_24h + " krit.)</span>" : ""); }, "max", function (r) { return r.errors_24h + r.critical_24h; }],
-    ["warnings_24h", "warningy 24h", String, "max"],
+    ["warnings_24h", "varování 24h", String, "max"],
     ["jobs_failing", "joby v chybě", function (v, r) { return v + ' <span class="muted">/ ' + r.jobs_total + "</span>"; }, "max"],
     ["jobs_overdue", "po termínu", String, "max"],
     ["max_streak", "nejdelší streak", function (v, r) { return v ? '<span class="streak">' + v + "×</span>" + (r.max_streak_job ? ' <span class="muted">' + esc(r.max_streak_job) + "</span>" : "") : "0"; }, "max"],
@@ -1148,7 +1348,7 @@
         });
         $("d-compare").innerHTML = "<thead><tr><th>profil</th>" + COMPARE_COLS.map(function (c) {
           var on = c[0] === sortKey;
-          return '<th><button type="button" class="sort' + (on ? " on" : "") + '" data-k="' + c[0] + '" aria-sort="' + (on ? (dir > 0 ? "ascending" : "descending") : "none") + '">' +
+          return '<th aria-sort="' + (on ? (dir > 0 ? "ascending" : "descending") : "none") + '"><button type="button" class="sort' + (on ? " on" : "") + '" data-k="' + c[0] + '">' +
             esc(c[1]) + (on ? (dir > 0 ? " ▲" : " ▼") : "") + "</button></th>";
         }).join("") + "</tr></thead><tbody>" + rows.map(function (row) {
           return '<tr><th scope="row"><a href="' + agentHref(row.profile) + '" style="color:' + (PROFILE_COLORS[row.profile] || "inherit") + '">' + esc(profileLabel(row.profile)) + "</a></th>" +
@@ -1179,28 +1379,46 @@
   // -- global search ------------------------------------------------------------
   // Searches what the dashboard already loaded (agents, cron jobs, repos,
   // today's incidents, panels and views) — no extra backend calls.
-  function fold(t) { return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
-  var SEARCH_TYPES = { view: "pohled", panel: "panel", agent: "agent", cron: "cron job", repo: "GitHub", incident: "incident" };
+  var SEARCH_TYPES = { action: "akce", view: "pohled", panel: "panel", agent: "agent", cron: "cron job", repo: "GitHub", incident: "incident" };
+  function clickSel(sel) { return function () { var b = document.querySelector(sel); if (b) b.click(); }; }
+  // Command palette actions: everything here only changes the view, except
+  // the restart, which still goes through the same confirm() dialog.
+  function paletteActions() {
+    var acts = [
+      ["Obnovit data", "načíst všechny panely hned (r)", pollAll, "refresh reload nacist"],
+      ["Přepnout tokeny ↔ $", "graf tokenů / nákladů ($)", clickSel("#token-mode button:not(.active)"), "cost naklady dolar"],
+      [getPalette() === "cb" ? "Neonová paleta stavů" : "Paleta pro barvoslepé", "barvy OK / varování / chyba", function () { setPalette(getPalette() === "cb" ? "default" : "cb"); }, "colour blind barvoslepe paleta"]
+    ];
+    if (HMCNotify.supported()) {
+      acts.push(HMCNotify.enabled() ? ["Vypnout notifikace", "upozornění na nové kritické incidenty", HMCNotify.disable, "notifikace notification"]
+        : ["Zapnout notifikace", "upozornit v prohlížeči na nový kritický incident", HMCNotify.enable, "notifikace notification critical"]);
+    }
+    [["6h", "6 h"], ["24h", "24 h"], ["7d", "7 dní"], ["30d", "30 dní"], ["all", "vše"]].forEach(function (w) {
+      acts.push(["Kvóta: okno " + w[1], "graf Claude kvóty", clickSel('#usage-windows button[data-w="' + w[0] + '"]'), "quota usage window okno"]);
+    });
+    acts.push(["Restartovat gateway…", "hermes gateway restart (s potvrzením)", clickSel("#restart-btn"), "restart gateway"]);
+    return acts.map(function (a) { return { type: "action", title: a[0], sub: a[1], run: a[2], extra: a[3] }; });
+  }
   function searchIndex() {
-    var st = window.__mcLastState || {}, items = [];
+    var st = window.__mcLastState || {}, items = paletteActions();
     [["#/compare", "Srovnání profilů", "HP, chyby, tokeny, nejdelší cron vedle sebe", "compare porovnani health"],
      ["#/incidents", "Plný log incidentů", "chyby + incidenty až 7 dní, filtry", "errors log chyby"],
      ["#/help", "Klávesové zkratky", "nápověda", "help shortcuts"]].forEach(function (v) {
       items.push({ type: "view", title: v[1], sub: v[2], href: v[0], extra: v[3] });
     });
     [["panel-usage", "Claude kvóta", "graf session / týden"], ["panel-gateway", "Gateway", "stav, PID, platformy, restarty"],
-     ["panel-agents", "Agenti", "karty profilů"], ["panel-incidents", "Co teď hoří", "chyby 24 h"],
+     ["panel-agents", "Agenti", "karty profilů"], ["panel-timeline", "Časová osa", "běhy, incidenty a výpadky všech profilů za 24 h", "timeline gantt historie"], ["panel-incidents", "Co teď hoří", "chyby 24 h"],
      ["panel-github", "GitHub repa", "push, otevřené PR"], ["panel-cron", "Cron úlohy", "všechny joby"],
      ["panel-tokens", "Tokeny / náklady", "state.db, projekce měsíce"]].forEach(function (pn) {
-      items.push({ type: "panel", title: pn[1], sub: pn[2], panel: pn[0] });
+      items.push({ type: "panel", title: pn[1], sub: pn[2], panel: pn[0], extra: pn[3] || "" });
     });
     (st.agents || []).forEach(function (a) {
-      items.push({ type: "agent", title: profileLabel(a.profile), sub: (a.connected === false ? "disconnected · " : "") + a.activity + (a.health ? " · HP " + a.health.score : ""),
+      items.push({ type: "agent", title: profileLabel(a.profile), sub: (a.connected === false ? L.CS.conn.disconnected + " · " : "") + L.activityLabel(a.activity) + (a.health ? " · HP " + a.health.score : ""),
         href: agentHref(a.profile), extra: a.platforms.map(function (p) { return p.platform; }).join(" "), color: PROFILE_COLORS[a.profile] });
     });
     (st.cron || []).forEach(function (c) {
       c.jobs.forEach(function (j) {
-        items.push({ type: "cron", title: j.name, sub: c.profile + " · " + (j.schedule || "") + " · " + j.status + (j.failure_streak ? " · " + j.failure_streak + "×" : ""),
+        items.push({ type: "cron", title: j.name, sub: c.profile + " · " + (j.schedule || "") + " · " + stLabel(j.status) + (j.failure_streak ? " · " + j.failure_streak + "×" : ""),
           href: jobHref(c.profile, j), extra: (j.id || "") + " " + c.profile, level: j.status === "error" ? "error" : "" });
       });
     });
@@ -1209,44 +1427,55 @@
         extra: (r.open_prs || []).map(function (p) { return "#" + p.number + " " + p.title; }).join(" ") });
     });
     (st.incidents || []).slice(0, 200).forEach(function (i) {
-      items.push({ type: "incident", title: i.message, sub: (i.profile || "") + " · " + i.level + " · " + (i.ts ? fmtDateTime(i.ts) : "bez času"),
+      items.push({ type: "incident", title: i.message, sub: (i.profile || "") + " · " + lvLabel(i.level) + " · " + (i.ts ? fmtDateTime(i.ts) : "bez času"),
         href: incidentsHash({ profile: i.profile || "", hours: "24", q: i.message.slice(0, 60) }), extra: (i.details || []).join(" ") + " " + (i.source || ""), level: i.level });
     });
     return items;
   }
   function searchItems(q) {
-    var words = fold(q).split(/\s+/).filter(Boolean);
-    if (!words.length) return [];
     var order = Object.keys(SEARCH_TYPES);
     return searchIndex().map(function (it) {
-      var title = fold(it.title), hay = title + " " + fold(it.sub) + " " + fold(it.extra);
-      if (!words.every(function (w) { return hay.indexOf(w) >= 0; })) return null;
-      it.rank = (title.indexOf(words[0]) === 0 ? 0 : title.indexOf(words[0]) > 0 ? 1 : 2) * 10 + order.indexOf(it.type);
+      var m = L.matchRank(q, it.title, it.sub + " " + (it.extra || ""));
+      if (m == null) return null;
+      it.rank = m * 10 + order.indexOf(it.type);
       return it;
     }).filter(Boolean).sort(function (a, b) { return a.rank - b.rank; }).slice(0, 50);
   }
+  // Empty palette: what needs attention first, then agents and actions.
+  function paletteSuggestions() {
+    var all = searchIndex();
+    var hot = all.filter(function (it) { return (it.type === "cron" && it.level === "error") || (it.type === "incident" && it.level === "critical"); });
+    var agents = all.filter(function (it) { return it.type === "agent"; });
+    var acts = all.filter(function (it) { return it.type === "action"; }).slice(0, 4);
+    var views = all.filter(function (it) { return it.type === "view"; });
+    return hot.slice(0, 5).concat(agents, acts, views);
+  }
   function renderSearch(r) {
-    setModalHead(crumbHome(), "Hledání");
+    setModalHead(crumbHome(), "Hledání a příkazy");
     $("modal-body").innerHTML = '<div class="filters filters-bar"><input id="d-search-q" type="search" placeholder="agent, cron job, repo, chyba, panel…" aria-label="hledat na dashboardu" autocomplete="off" value="' + esc(r.q || "") + '"></div>' +
-      '<ul class="search-results" id="d-search-list" role="listbox"></ul>';
+      '<div class="sr-only" id="d-search-status" role="status" aria-live="polite"></div>' +
+      '<ul class="search-results" id="d-search-list" aria-label="výsledky"></ul>';
     var sel = 0, results = [];
     var draw = function () {
       var q = $("d-search-q").value;
-      results = searchItems(q);
+      var empty = !q.trim();
+      results = empty ? paletteSuggestions() : searchItems(q);
       sel = Math.min(sel, Math.max(0, results.length - 1));
-      $("d-search-list").innerHTML = !q.trim() ? '<li class="empty muted">Piš pro hledání v agentech, cron jobech, repech, dnešních incidentech a panelech. <kbd>↑</kbd> <kbd>↓</kbd> výběr, <kbd>Enter</kbd> otevřít.</li>'
-        : results.length ? results.map(function (it, i) {
+      $("d-search-list").innerHTML = (empty ? '<li class="sr-hint muted small">Agenti, cron joby, repa, dnešní incidenty, panely i akce. <kbd>↑</kbd> <kbd>↓</kbd> výběr, <kbd>Enter</kbd> otevřít.</li>' : "") +
+        (results.length ? results.map(function (it, i) {
           var href = it.href || it.url || "#";
-          return '<li role="option" aria-selected="' + (i === sel) + '" class="' + (i === sel ? "sel " : "") + esc(it.level || "") + '"><a href="' + esc(href) + '" data-i="' + i + '"' + (it.url ? ' target="_blank" rel="noopener"' : "") + ">" +
+          return '<li class="' + (i === sel ? "sel " : "") + esc(it.level || "") + '"><a href="' + esc(href) + '" data-i="' + i + '"' + (i === sel ? ' aria-current="true"' : "") + (it.url ? ' target="_blank" rel="noopener"' : "") + ">" +
             '<span class="sr-type">' + esc(SEARCH_TYPES[it.type]) + '</span><span class="sr-title"' + (it.color ? ' style="color:' + it.color + '"' : "") + ">" + esc(it.title) + "</span>" +
             '<span class="sr-sub muted small">' + esc(it.sub) + "</span></a></li>";
-        }).join("") + '<li class="sr-more"><a href="' + incidentsHash({ hours: "168", q: q }) + '">hledat „' + esc(q) + '“ v plném logu incidentů (7 dní) ›</a></li>'
-        : '<li class="empty">Nic nenalezeno. <a href="' + incidentsHash({ hours: "168", q: q }) + '">Zkusit plný log incidentů (7 dní) ›</a></li>';
+        }).join("") + (empty ? "" : '<li class="sr-more"><a href="' + incidentsHash({ hours: "168", q: q }) + '">hledat „' + esc(q) + '“ v plném logu incidentů (7 dní) ›</a></li>')
+        : '<li class="empty">Nic nenalezeno. <a href="' + incidentsHash({ hours: "168", q: q }) + '">Zkusit plný log incidentů (7 dní) ›</a></li>');
+      $("d-search-status").textContent = empty ? "" : results.length ? results.length + " výsledků" : "nic nenalezeno";
       history.replaceState(null, "", "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""));
     };
     var open = function (it) {
       if (!it) return;
       if (it.panel) { closeModal(); setTimeout(function () { goPanel(it.panel); }, 80); return; }
+      if (it.run) { closeModal(); setTimeout(it.run, 80); return; }
       if (it.url) { window.open(it.url, "_blank", "noopener"); return; }
       modal.pendingPush = true; location.hash = it.href;
     };
@@ -1265,7 +1494,7 @@
       var a = e.target.closest ? e.target.closest("a[data-i]") : null;
       if (!a) return;
       var it = results[+a.getAttribute("data-i")];
-      if (it && it.panel) { e.preventDefault(); open(it); }
+      if (it && (it.panel || it.run)) { e.preventDefault(); open(it); }
     });
     draw();
     input.focus();
@@ -1274,9 +1503,10 @@
 
   // -- keyboard shortcuts -------------------------------------------------------
   var SHORTCUTS = [
-    ["?", "tahle nápověda"],
+    ["?", "tahle nápověda a nastavení (paleta, notifikace)"],
+    ["Ctrl K", "příkazová paleta: skok na profil / cron job / incident / panel, akce (na Macu ⌘ K)"],
     ["/", "hledat na celém dashboardu (v detailu s vlastním hledáním: hledat v něm)"],
-    ["g a", "agenti"], ["g s", "gateway"], ["g u", "Claude kvóta"], ["g i", "co teď hoří"],
+    ["g a", "agenti"], ["g o", "časová osa"], ["g s", "gateway"], ["g u", "Claude kvóta"], ["g i", "co teď hoří"],
     ["g c", "cron úlohy"], ["g t", "tokeny / náklady"], ["g r", "GitHub repa"], ["g g", "nahoru (BMO)"],
     ["g l", "plný log incidentů"], ["g p", "srovnání profilů"],
     ["1 – 5", "okno grafu kvóty 6h / 24h / 7d / 30d / vše"],
@@ -1284,31 +1514,44 @@
     ["r", "načíst data hned (v detailu: obnovit detail)"],
     ["Esc", "zavřít detail / opustit pole"]
   ];
-  var GO = { a: "panel-agents", s: "panel-gateway", u: "panel-usage", i: "panel-incidents", c: "panel-cron", t: "panel-tokens", r: "panel-github", g: "top" };
+  var GO = { a: "panel-agents", o: "panel-timeline", s: "panel-gateway", u: "panel-usage", i: "panel-incidents", c: "panel-cron", t: "panel-tokens", r: "panel-github", g: "top" };
   var gPending = 0;
 
   function renderHelp() {
-    setModalHead(crumbHome(), "Klávesové zkratky");
+    setModalHead(crumbHome(), "Zkratky a nastavení");
     $("modal-body").innerHTML = '<table class="keys">' + SHORTCUTS.map(function (k) {
       return "<tr><td>" + k[0].split(" ").map(function (x) { return x === "–" ? "–" : "<kbd>" + esc(x) + "</kbd>"; }).join(" ") + "</td><td>" + esc(k[1]) + "</td></tr>";
     }).join("") + "</table>" +
-      '<h4 class="help-h">Zobrazení</h4><div class="palette-row"><span>barevná paleta stavů</span><div class="seg" id="d-palette" role="group" aria-label="paleta">' +
+      '<h3 class="help-h">Zobrazení</h3><div class="palette-row"><span>barevná paleta stavů</span><div class="seg" id="d-palette" role="group" aria-label="paleta">' +
       [["default", "neonová"], ["cb", "pro barvoslepé"]].map(function (o) {
         return '<button type="button" data-p="' + o[0] + '"' + (getPalette() === o[0] ? ' class="active" aria-pressed="true"' : ' aria-pressed="false"') + ">" + o[1] + "</button>";
       }).join("") + '</div></div><p class="muted small">Pro barvoslepé: OK = modrá, varování = žlutá, chyba = oranžová a chybové tečky jsou kosočtverce. Uloží se jen v tomhle prohlížeči.</p>' +
+      '<div class="palette-row"><span>notifikace kritických incidentů</span><div class="seg" id="d-notify" role="group" aria-label="notifikace">' +
+      '<button type="button" data-n="1"' + (HMCNotify.supported() ? "" : " disabled") + ">zapnuto</button><button type=\"button\" data-n=\"0\">vypnuto</button></div></div>" +
+      '<p class="muted small">' + (HMCNotify.supported()
+        ? "Upozornění v prohlížeči jen na nové incidenty úrovně kritické (ne na ty, co už byly vidět při otevření). Dokud jsou zapnuté, skrytá záložka se ptá na stav jednou za 30 s."
+        : "Prohlížeč povolí notifikace jen v zabezpečeném kontextu: https, nebo http://127.0.0.1 / localhost (přes VPN adresu po http nejdou).") + "</p>" +
       '<p class="muted small">Zkratky nefungují, když píšeš do pole (kromě <kbd>Esc</kbd>). Detailní pohledy mají sdílitelné URL (<code>#/agent/…</code>, <code>#/cron/…</code>, <code>#/incidents…</code>, <code>#/compare</code>, <code>#/search?q=…</code>, <code>#/help</code>).</p>';
+    HMCNotify.sync();
   }
-  document.addEventListener("click", function (e) {
-    var b = e.target.closest ? e.target.closest("#d-palette button") : null;
-    if (!b) return;
-    var p = b.getAttribute("data-p");
+  function setPalette(p) {
     try { localStorage.setItem(PALETTE_KEY, p); } catch (err) { /* private mode: this page only */ }
     applyPalette(p);
     Array.prototype.forEach.call(document.querySelectorAll("#d-palette button"), function (x) {
-      x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", String(x === b));
+      var on = x.getAttribute("data-p") === p;
+      x.classList.toggle("active", on); x.setAttribute("aria-pressed", String(on));
     });
     if (window.__mcLastState) updateFavicon(window.__mcLastState.summary.level, window.__mcLastState.summary.issues.length);
     drawUsage(lastUsage); drawTokens(lastTokens);
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("#d-palette button") : null;
+    if (b) setPalette(b.getAttribute("data-p"));
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("#d-notify button") : null;
+    if (!b || b.disabled) return;
+    if (b.getAttribute("data-n") === "1") HMCNotify.enable(); else HMCNotify.disable();
   });
   function navigate(hash) {
     if (location.hash === hash) { route(); return; }
@@ -1334,6 +1577,11 @@
     return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
   }
   document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K")) {
+      e.preventDefault(); // works from inside inputs too, like in other apps
+      if (modal.route && modal.route.view === "search") closeModal(); else navigate("#/search");
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTyping(e.target)) {
       if (e.key === "Escape" && !modal.open) e.target.blur();
@@ -1439,7 +1687,7 @@
       getJSON("/api/forecast").then(function (f) { lastForecast = f; }, function () { lastForecast = { error: true }; })
     ]).then(function () { drawTokens(lastTokens); renderForecast(); });
   });
-  function pollAll() { pollState(); pollUsage(); pollGithub(); pollTokens(); }
+  function pollAll() { pollState(); pollUsage(); pollSpark(); pollGithub(); pollTokens(); pollTimeline(); }
   document.addEventListener("visibilitychange", function () { if (!document.hidden) pollAll(); });
   $("usage-export").innerHTML = exportLinks("kind=usage&window=" + usageWindow);
   $("token-export").innerHTML = exportLinks("kind=tokens&days=14");
@@ -1453,8 +1701,11 @@
     navigator.serviceWorker.register("/sw.js").catch(function () { /* optional */ });
   }
   every(POLL_STATE_MS, pollState);
+  setInterval(function () { if (document.hidden && HMCNotify.enabled()) pollState(); }, 30000);
   every(POLL_USAGE_MS, pollUsage);
+  every(POLL_USAGE_MS, pollSpark);
   every(POLL_SLOW_MS, pollGithub);
   every(POLL_SLOW_MS, pollTokens);
+  every(POLL_SLOW_MS, pollTimeline);
   setInterval(function () { tickClock(); tickUpdated(); }, 1000);
 })();

@@ -1116,5 +1116,94 @@ def token_export_rows(tokens):
     return rows, ["day", "profile", "total_tokens", "cost_usd"] + metric_cols
 
 
+# ---------------------------------------------------------------------------
+# Timeline of all profiles (Gantt-like strip, last N hours)
+# ---------------------------------------------------------------------------
+
+TIMELINE_STATES = ("none", "ok", "warning", "error", "critical")
+TIMELINE_HOURS = (6, 24, 72)
+
+
+def gateway_down_intervals(events, start, end, running=True, down_since=None):
+    """``[{start, end, open}]`` when the gateway was down inside [start, end].
+
+    ``events`` are the in-memory restart events (any order): ``down`` opens an
+    interval, ``up`` / ``restart`` / a successful API restart closes it. When
+    the gateway is down right now and no ``down`` was observed (dashboard
+    started while it was down), the interval starts at ``down_since`` (last
+    heartbeat) or at ``start``.
+    """
+    out, opened = [], None
+    for e in sorted(events or [], key=lambda e: e.get("ts") or 0):
+        kind, ts = e.get("kind"), e.get("ts")
+        if ts is None:
+            continue
+        if kind == "down" and opened is None:
+            opened = ts
+        elif opened is not None and (kind in ("up", "restart") or (kind == "api_restart" and e.get("ok"))):
+            out.append((opened, ts, False))
+            opened = None
+    if not running:
+        if opened is None:
+            opened = down_since if down_since is not None else start
+        out.append((opened, end, True))
+    return [{"start": max(a, start), "end": min(b, end), "open": o}
+            for a, b, o in out if b > start and a < end]
+
+
+def build_timeline(profiles, runs, incidents, start, end, buckets=96):
+    """Worst state per time bucket and profile.
+
+    ``runs``: ``{profile: [{job, ts, duration, status}]}`` (cron output files),
+    ``incidents``: merged incident list. A run marks the buckets it covered
+    ``ok`` / ``error``; incidents raise a bucket to their level. ``none`` =
+    nothing recorded (not "down" - there is no history of idle periods).
+    """
+    span = float(max(1, end - start))
+    width = span / buckets
+    rank = {s: i for i, s in enumerate(TIMELINE_STATES)}
+
+    def idx(ts):
+        return int(min(buckets - 1, max(0, (ts - start) // width)))
+
+    rows = []
+    for p in profiles:
+        cells = ["none"] * buckets
+
+        def raise_to(i, state):
+            if rank[state] > rank[cells[i]]:
+                cells[i] = state
+
+        prof_runs = []
+        for r in runs.get(p, []):
+            ts = r.get("ts")
+            if ts is None or ts > end:
+                continue
+            stop = ts + (r.get("duration") or 0)
+            if stop < start:
+                continue
+            state = "error" if r.get("status") == "error" else "ok"
+            for i in range(idx(max(ts, start)), idx(min(stop, end)) + 1):
+                raise_to(i, state)
+            prof_runs.append({"job": r.get("job"), "job_id": r.get("job_id"), "ts": ts,
+                              "duration": r.get("duration"), "status": state})
+        counts = {"warning": 0, "error": 0, "critical": 0}
+        for i in incidents:
+            ts, level = i.get("ts"), i.get("level")
+            if i.get("profile") != p or ts is None or not (start <= ts <= end) or level not in counts:
+                continue
+            counts[level] += 1
+            raise_to(idx(ts), level)
+        prof_runs.sort(key=lambda r: r["ts"])
+        rows.append({
+            "profile": p,
+            "buckets": cells,
+            "runs": len(prof_runs),
+            "failed": [r for r in prof_runs if r["status"] == "error"][-50:],
+            "incidents": counts,
+        })
+    return {"start": start, "end": end, "bucket_seconds": width, "states": list(TIMELINE_STATES), "profiles": rows}
+
+
 def json_dumps(obj):
     return json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":"))

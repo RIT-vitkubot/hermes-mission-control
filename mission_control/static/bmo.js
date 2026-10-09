@@ -292,18 +292,73 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+// ---- performance: render only when it can be seen, adapt to slow hardware
+// The loop is fully stopped (no idle requestAnimationFrame) while the tab is
+// hidden or BMO is scrolled away. Quality levels: 0 = full, 1 = 30 fps cap,
+// pixel ratio 1, half the particles, 2 = 20 fps cap, a quarter of them.
+// A level is dropped when frames stay slow for ~3 s; low-end devices and
+// prefers-reduced-motion start at level 1 (reduced motion also calms the
+// shaking). ?bmo-quality=0|1|2 pins a level.
+const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const lowEnd = (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) || (navigator.deviceMemory && navigator.deviceMemory <= 4);
+const pinnedQuality = new URLSearchParams(location.search).get("bmo-quality");
+const QUALITY = [
+  { fps: 60, ratio: Math.min(window.devicePixelRatio || 1, 2), particles: N },
+  { fps: 30, ratio: 1, particles: N / 2 },
+  { fps: 20, ratio: 1, particles: N / 4 },
+];
+const perf = { level: 0, frames: 0, slow: 0, running: false, fps: 0 };
+window.__bmoPerf = perf;
+function setQuality(level) {
+  perf.level = Math.max(0, Math.min(QUALITY.length - 1, level));
+  const q = QUALITY[perf.level];
+  renderer.setPixelRatio(q.ratio);
+  pGeo.setDrawRange(0, q.particles);
+  resize();
+}
+setQuality(pinnedQuality != null ? +pinnedQuality || 0 : (lowEnd || reducedMotion ? 1 : 0));
+const motion = reducedMotion ? 0.3 : 1; // amplitude of shaking / flailing
+
 // ---- animation loop
 const clock = new THREE.Clock();
 const GREY = new THREE.Color(0x55606e);
 let t = 0;
 let nextBlink = 2;
 let flicker = 0;
-let visible = true;
-new IntersectionObserver((entries) => { visible = entries[0].isIntersecting; }).observe(stage);
+let onScreen = true;
+let lastFrame = 0;
+let fpsWindow = { start: 0, frames: 0 };
+
+function shouldRun() { return onScreen && !document.hidden; }
+function startLoop() {
+  if (perf.running || !shouldRun()) return;
+  perf.running = true;
+  clock.getDelta(); // drop the time spent paused
+  lastFrame = 0;
+  requestAnimationFrame(frame);
+}
+function frame(now) {
+  if (!shouldRun()) { perf.running = false; return; }
+  requestAnimationFrame(frame);
+  const q = QUALITY[perf.level];
+  if (lastFrame && now - lastFrame < 1000 / q.fps - 2) return; // fps cap
+  const gap = lastFrame ? now - lastFrame : 0;
+  lastFrame = now;
+  // adaptive quality: frames much slower than the target for ~3 s -> step down
+  if (pinnedQuality == null && gap) {
+    perf.slow = gap > 1000 / q.fps * 1.6 ? perf.slow + gap : Math.max(0, perf.slow - gap);
+    if (perf.slow > 3000 && perf.level < QUALITY.length - 1) { perf.slow = 0; setQuality(perf.level + 1); }
+  }
+  if (!fpsWindow.start) fpsWindow.start = now;
+  fpsWindow.frames++;
+  if (now - fpsWindow.start >= 1000) { perf.fps = Math.round(fpsWindow.frames * 1000 / (now - fpsWindow.start)); fpsWindow = { start: now, frames: 0 }; }
+  perf.frames++;
+  animate();
+}
+new IntersectionObserver((entries) => { onScreen = entries[0].isIntersecting; startLoop(); }).observe(stage);
+document.addEventListener("visibilitychange", startLoop);
 
 function animate() {
-  requestAnimationFrame(animate);
-  if (!visible || document.hidden) return;
   const dt = Math.min(clock.getDelta(), 0.05);
   const target = MOODS[mood];
   cur.glow.lerp(target.glow, 0.05);
@@ -318,18 +373,18 @@ function animate() {
 
   // float / shake / slump
   bmo.position.y = down ? -0.35 + Math.sin(t * 1.2) * 0.04 : Math.sin(t * 1.6) * (tired ? 0.07 : 0.15) + 0.1;
-  bmo.position.x = alarmed ? Math.sin(t * 40) * 0.05 : 0;
+  bmo.position.x = alarmed ? Math.sin(t * (reducedMotion ? 6 : 40)) * 0.05 * motion : 0;
   const lookX = down ? 0 : pointer.x * 0.5 + Math.sin(t * 0.5) * 0.15;
   bmo.rotation.y += (lookX - bmo.rotation.y) * 0.05;
   bmo.rotation.x += ((down ? 0.22 : tired ? 0.08 : pointer.y * 0.15) - bmo.rotation.x) * 0.05;
-  const tilt = alarmed ? Math.sin(t * 25) * 0.03 : down ? 0.2 : Math.sin(t * 0.8) * 0.02;
+  const tilt = alarmed ? Math.sin(t * (reducedMotion ? 4 : 25)) * 0.03 * motion : down ? 0.2 : Math.sin(t * 0.8) * 0.02;
   bmo.rotation.z += (tilt - bmo.rotation.z) * (alarmed ? 1 : 0.06);
 
   // limbs
   let aL, aR;
   if (alarmed) {
-    aL = -1.9 + Math.sin(t * 9) * 0.6;
-    aR = 1.9 - Math.sin(t * 9 + 1) * 0.6;
+    aL = -1.9 + Math.sin(t * 9) * 0.6 * motion;
+    aR = 1.9 - Math.sin(t * 9 + 1) * 0.6 * motion;
   } else if (down) {
     aL = -0.05; aR = 0.08;
   } else if (tired) {
@@ -432,4 +487,4 @@ function animate() {
 
   renderer.render(scene, camera);
 }
-animate();
+startLoop();
