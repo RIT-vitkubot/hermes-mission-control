@@ -11,9 +11,9 @@
  * Only registered in a secure context (http://127.0.0.1 / localhost); over
  * plain http on the VPN address browsers do not allow service workers.
  */
-var CACHE = "hmc-static-v1";
+var CACHE = "hmc-static-v2";
 var THREE_URL = "https://unpkg.com/three@0.160.0/build/three.module.js";
-var STATIC = ["/", "/style.css", "/app.js", "/bmo.js", "/favicon.svg", "/icon-192.png", "/icon-512.png",
+var STATIC = ["/", "/style.css", "/lib.js", "/app.js", "/bmo.js", "/favicon.svg", "/icon-192.png", "/icon-512.png",
   "/manifest.webmanifest", "/offline.html"];
 
 self.addEventListener("install", function (event) {

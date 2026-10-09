@@ -22,6 +22,16 @@
   }
   applyPalette(getPalette());
 
+  var L = window.HMCLib;
+  function stLabel(s) { return L.label("status", s); }
+  function lvLabel(l) { return L.label("level", l); }
+  function statusPill(s) { return '<span class="pill pill-' + esc(s) + '">' + esc(stLabel(s)) + "</span>"; }
+  function connPill(a) {
+    return a.connected === true ? '<span class="pill pill-ok">' + L.CS.conn.connected + "</span>"
+      : a.connected === false ? '<span class="pill pill-error">' + L.CS.conn.disconnected + "</span>"
+        : '<span class="pill pill-unknown">' + (a.served === false ? L.CS.conn.unserved : L.CS.conn.na) + "</span>";
+  }
+
   var tzOffset = null; // host offset in seconds; null -> browser local
   var usageError = null, tokensError = null, lastForecast = null;
   var usageWindow = "24h";
@@ -128,7 +138,7 @@
     window.dispatchEvent(new CustomEvent("mc-state", { detail: st }));
     var sum = st.summary;
     document.body.setAttribute("data-level", sum.level);
-    pill($("overall-pill"), sum.level, { ok: "all systems nominal", warn: "warning", error: "alert" }[sum.level]);
+    pill($("overall-pill"), sum.level, L.label("overall", sum.level));
 
     var bubble = $("bubble");
     if (lastBubble !== sum.message) {
@@ -157,13 +167,13 @@
 
   function renderGateway(gw, now) {
     pill($("gw-badge"), gw.running ? (gw.status === "warn" ? "warn" : "ok") : "error",
-      gw.available ? (gw.running ? "running" : "down") : "no data");
+      gw.available ? (gw.running ? L.CS.gateway.up : L.CS.gateway.down) : L.CS.gateway.nodata);
     var rows = [
       ["stav", gw.state],
       ["PID", gw.pid != null ? gw.pid + (gw.pid_alive === false ? " (mrtvý)" : "") : "–"],
-      ["uptime", gw.uptime_seconds != null ? fmtDur(gw.uptime_seconds) + (gw.started_at ? " (od " + fmtDateTime(gw.started_at) + ")" : "") : "–"],
-      ["heartbeat", gw.updated_at ? fmtDateTime(gw.updated_at) + " (" + rel(gw.updated_at, now) + ")" : "–"],
-      ["active agents", typeof gw.active_agents === "object" && gw.active_agents !== null ? JSON.stringify(gw.active_agents) : (gw.active_agents == null ? "–" : gw.active_agents)],
+      ["doba běhu", gw.uptime_seconds != null ? fmtDur(gw.uptime_seconds) + (gw.started_at ? " (od " + fmtDateTime(gw.started_at) + ")" : "") : "–"],
+      ["poslední tep", gw.updated_at ? fmtDateTime(gw.updated_at) + " (" + rel(gw.updated_at, now) + ")" : "–"],
+      ["aktivní agenti", typeof gw.active_agents === "object" && gw.active_agents !== null ? JSON.stringify(gw.active_agents) : (gw.active_agents == null ? "–" : gw.active_agents)],
       ["verze", (gw.code_version || "–") + (gw.code_sha ? " @ " + String(gw.code_sha).slice(0, 10) : "")]
     ];
     setHTML($("gw-kv"), rows.map(function (r) { return "<dt>" + esc(r[0]) + "</dt><dd>" + esc(r[1]) + "</dd>"; }).join(""));
@@ -192,12 +202,10 @@
       (procs.unattributed ? " Nepřiřazené procesy: " + procs.unattributed + "." : "");
     setHTML($("agents"), agents.map(function (a) {
       var cls = a.connected === true ? "ok" : (a.connected === false ? "error" : "");
-      var conn = a.connected === true ? '<span class="pill pill-ok">connected</span>'
-        : a.connected === false ? '<span class="pill pill-error">disconnected</span>'
-          : '<span class="pill pill-unknown">' + (a.served ? "n/a" : "not served") + "</span>";
+      var conn = connPill(a);
       var c = a.cron;
-      var counts = c.available ? Object.keys(c.counts).map(function (k) { return c.counts[k] + " " + k; }).join(", ") || "žádné joby" : "jobs.json chybí";
-      var lastRun = c.last_run_at ? rel(c.last_run_at, now) + (c.last_job ? " · " + c.last_job.name + " (" + c.last_job.status + ")" : "") : "–";
+      var counts = c.available ? Object.keys(c.counts).map(function (k) { return c.counts[k] + " " + stLabel(k); }).join(", ") || "žádné joby" : "jobs.json chybí";
+      var lastRun = c.last_run_at ? rel(c.last_run_at, now) + (c.last_job ? " · " + c.last_job.name + " (" + stLabel(c.last_job.status) + ")" : "") : "–";
       var nextRun = c.next_run_at ? rel(c.next_run_at, now) + (c.next_job ? " · " + c.next_job.name : "") : "–";
       var platforms = a.platforms.map(function (p) {
         return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + "</span>";
@@ -205,11 +213,11 @@
       return '<div class="agent ' + cls + (a.busy ? " busy" : "") + '">' +
         '<div class="agent-head"><a class="agent-name" href="' + agentHref(a.profile) + '" style="color:' + (PROFILE_COLORS[a.profile] || "inherit") + '">' + esc(a.label) + "</a>" +
         '<span class="agent-badges">' + healthBadge(a.health) + conn + "</span></div>" +
-        '<div class="agent-activity">' + (a.busy ? "⚡ " : "💤 ") + esc(a.activity) + "</div>" +
+        '<div class="agent-activity">' + (a.busy ? "⚡ " : "💤 ") + esc(L.activityLabel(a.activity)) + "</div>" +
         (platforms ? '<div class="agent-row"><span>platformy</span><span>' + platforms + "</span></div>" : "") +
         '<div class="agent-row"><span>cron</span><span>' + esc(counts) + "</span></div>" +
-        '<div class="agent-row"><span>poslední run</span><span>' + esc(lastRun) + "</span></div>" +
-        '<div class="agent-row"><span>další run</span><span>' + esc(nextRun) + "</span></div>" +
+        '<div class="agent-row"><span>poslední běh</span><span>' + esc(lastRun) + "</span></div>" +
+        '<div class="agent-row"><span>další běh</span><span>' + esc(nextRun) + "</span></div>" +
         '<div class="agent-row" title="' + esc(procTip) + '"><span>procesy ⓘ</span><span>' + (a.processes == null ? "N/A" : "~" + a.processes) + "</span></div>" +
         (a.log_tail && a.log_tail.length ? '<details data-key="log-' + esc(a.profile) + '"><summary class="muted">co dělal (agent.log)</summary><pre>' + esc(a.log_tail.join("\n")) + "</pre></details>" : "") +
         '<a class="link-more agent-more" href="' + agentHref(a.profile) + '">detail profilu ›</a>' +
@@ -222,7 +230,7 @@
     pill($("inc-count"), serious ? "error" : (list.length ? "warn" : "ok"), String(list.length));
     if (!list.length) { setHTML($("incidents"), '<li class="empty">Nic nehoří. 🔥🚫</li>'); return; }
     setHTML($("incidents"), list.slice(0, 100).map(function (i) {
-      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(i.level) + "</span>" +
+      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(lvLabel(i.level)) + "</span>" +
         "<span>" + esc(i.ts ? fmtDateTime(i.ts) + " (" + rel(i.ts, now) + ")" : "bez času") + "</span>" +
         (i.profile ? '<a href="#/incidents?profile=' + encodeURIComponent(i.profile) + '">' + esc(i.profile) + "</a>" : "") +
         "<span>" + esc(i.source || "") + "</span></div>" +
@@ -242,13 +250,13 @@
       var rows = c.jobs.map(function (j) {
         if (j.status === "error") failing++;
         return '<tr class="job-' + esc(j.status) + '"><td data-label="job"><a href="' + jobHref(c.profile, j) + '">' + esc(j.name) + "</a></td>" + '<td data-label="rozvrh" class="mono">' + esc(j.schedule || "–") + "</td>" +
-          '<td data-label="stav"><span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span></td>" +
-          '<td data-label="poslední" title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(j.last_status) : "") + "</td>" +
+          '<td data-label="stav">' + statusPill(j.status) + "</td>" +
+          '<td data-label="poslední" title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(stLabel(j.last_status)) : "") + "</td>" +
           '<td data-label="další" title="' + esc(fmtDateTime(j.next_run_at)) + '">' + esc(j.enabled ? rel(j.next_run_at, now) : "–") + "</td>" +
           '<td data-label="běhy"><span class="runs-cell">' + sparkHTML(j.recent) + (j.failure_streak > 0 ? '<span class="streak">' + j.failure_streak + "×</span>" : '<span class="muted">0</span>') + "</span></td></tr>";
       }).join("");
       return '<div class="cron-profile"><h4><a href="' + agentHref(c.profile) + '" style="color:' + (PROFILE_COLORS[c.profile] || "inherit") + '">' + esc(c.profile) + "</a><span class=\"muted\">" + c.jobs.length + " jobů</span></h4>" +
-        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th title=\"posledních až 12 běhů (výška = délka běhu, odhad) a failure streak\">běhy</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
+        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th title=\"posledních až 12 běhů (výška = délka běhu, odhad) a počet chyb v řadě\">běhy</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
         "</div>";
     }).join(""));
     $("cron-meta").textContent = total + " jobů celkem" + (failing ? " · " + failing + " v chybě" : "");
@@ -262,7 +270,7 @@
     runs.forEach(function (r) { if (r.duration > maxD) maxD = r.duration; if (r.status === "error") failed++; });
     return '<span class="spark" role="img" aria-label="' + runs.length + " posledních běhů, " + failed + ' chyb">' + runs.map(function (r) {
       var h = r.duration != null && maxD > 0 ? 5 + Math.round(11 * r.duration / maxD) : 16;
-      var tip = fmtDateTime(r.ts) + " · " + r.status + (r.duration != null ? " · ~" + fmtDur(r.duration) : "");
+      var tip = fmtDateTime(r.ts) + " · " + stLabel(r.status) + (r.duration != null ? " · ~" + fmtDur(r.duration) : "");
       return '<span class="spark-bar ' + esc(r.status) + '" style="height:' + h + 'px" title="' + esc(tip) + '"></span>';
     }).join("") + "</span>";
   }
@@ -778,7 +786,7 @@
   function incidentItems(list, now) {
     if (!list.length) return '<li class="empty">Žádné záznamy pro zvolený filtr.</li>';
     return list.map(function (i) {
-      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(i.level) + "</span>" +
+      return '<li class="' + esc(i.level) + '"><div class="inc-meta"><span class="inc-lvl">' + esc(lvLabel(i.level)) + "</span>" +
         "<span>" + esc(i.ts ? fmtDateTime(i.ts) + " (" + rel(i.ts, now) + ")" : "bez času") + "</span>" +
         (i.profile ? '<a href="#/incidents?profile=' + encodeURIComponent(i.profile) + '">' + esc(i.profile) + "</a>" : "") +
         "<span>" + esc(i.source || "") + "</span></div>" +
@@ -845,7 +853,7 @@
       empty: entry.available ? "Žádná spotřeba v tomto období" : (entry.error ? "Chyba state.db: " + entry.error : "state.db nenalezen"),
       series: keys.map(function (k, i) {
         return {
-          name: k === "cost" ? "náklady" : k.replace(/_tokens?$/, "").replace(/_/g, " "),
+          name: L.tokenSeriesName(k),
           color: TOKEN_SERIES_COLORS[i % TOKEN_SERIES_COLORS.length],
           values: days.map(function (d) {
             var b = entry.days[d];
@@ -875,17 +883,16 @@
       setModalHead(crumbHome() + " › agenti", (a.label === "BMO" ? "BMO · default" : a.label));
       var cron = (st.cron || []).filter(function (c) { return c.profile === r.profile; })[0] || { jobs: [] };
       var procs = ((st.processes && st.processes.list) || []).filter(function (x) { return x.profile === r.profile; });
-      var conn = a.connected === true ? '<span class="pill pill-ok">connected</span>'
-        : a.connected === false ? '<span class="pill pill-error">disconnected</span>' : '<span class="pill pill-unknown">n/a</span>';
+      var conn = connPill(a);
       var html = '<div class="detail-grid">' +
         '<section class="detail-card"><h4>Stav</h4><dl class="kv">' +
         "<dt>spojení</dt><dd>" + conn + "</dd>" +
-        "<dt>teď</dt><dd>" + (a.busy ? "⚡ " : "💤 ") + esc(a.activity) + "</dd>" +
+        "<dt>teď</dt><dd>" + (a.busy ? "⚡ " : "💤 ") + esc(L.activityLabel(a.activity)) + "</dd>" +
         "<dt>platformy</dt><dd>" + (a.platforms.length ? a.platforms.map(function (p) {
           return '<span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + ' <span class="muted">' + esc(platformTitle(p)) + "</span>";
         }).join("<br>") : '<span class="muted">žádné</span>') + "</dd>" +
         '<dt title="Odhad podle child procesů gateway PID">procesy ⓘ</dt><dd>' + (a.processes == null ? "N/A" : "~" + a.processes) + "</dd>" +
-        (a.health ? "<dt>health</dt><dd>" + healthBadge(a.health) + (a.health.factors.length ? '<ul class="health-factors">' + a.health.factors.map(function (f) {
+        (a.health ? "<dt>zdraví</dt><dd>" + healthBadge(a.health) + (a.health.factors.length ? '<ul class="health-factors">' + a.health.factors.map(function (f) {
           return "<li>" + esc(f.label) + ' <span class="muted">−' + f.penalty + "</span></li>";
         }).join("") + "</ul>" : ' <span class="muted">bez problémů</span>') + "</dd>" : "") +
         "</dl>" +
@@ -895,7 +902,7 @@
         "</section>" +
         '<section class="detail-card"><h4>Cron joby <span class="muted small">(' + cron.jobs.length + ")</span></h4>" +
         (cron.available === false ? '<div class="empty">jobs.json nenalezen</div>' : cron.jobs.length ? '<ul class="job-list">' + cron.jobs.map(function (j) {
-          return '<li><a href="' + jobHref(r.profile, j) + '">' + esc(j.name) + '</a> <span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span>" +
+          return '<li><a href="' + jobHref(r.profile, j) + '">' + esc(j.name) + "</a> " + statusPill(j.status) +
             '<span class="muted small">' + esc(j.schedule || "") + " · poslední " + esc(rel(j.last_run_at, st.now)) + (j.failure_streak ? ' · <span class="streak">' + j.failure_streak + "×</span>" : "") + "</span>" + sparkHTML(j.recent) + "</li>";
         }).join("") + "</ul>" : '<div class="empty">žádné joby</div>') +
         "</section></div>" +
@@ -908,7 +915,7 @@
         '<ul class="incidents" id="d-incidents"><li class="empty loading">Načítám…</li></ul></section>' +
         '<section class="detail-card"><div class="panel-head"><h4>agent.log</h4><div class="filters">' +
         '<select id="d-log-lines" aria-label="počet řádků"><option value="100">100 řádků</option><option value="300" selected>300 řádků</option><option value="1000">1000 řádků</option></select>' +
-        '<select id="d-log-level" aria-label="závažnost"><option value="">vše</option><option value="warning">warning+</option><option value="error">error+</option></select>' +
+        '<select id="d-log-level" aria-label="závažnost"><option value="">vše</option><option value="warning">varování+</option><option value="error">chyba+</option></select>' +
         '<input id="d-log-q" type="search" placeholder="hledat…" aria-label="hledat v logu"></div></div>' +
         '<pre class="log-view" id="d-log"><span class="muted">Načítám…</span></pre><div class="muted small" id="d-log-meta"></div></section>';
       $("modal-body").innerHTML = html;
@@ -980,16 +987,16 @@
       var j = d.job, now = Date.now() / 1000;
       setModalHead(crumbHome() + ' › <a href="' + agentHref(r.profile) + '">' + esc(profileLabel(r.profile)) + "</a> › cron", j.name);
       var strip = d.runs.slice().reverse().map(function (x) {
-        return '<span class="run-dot ' + esc(x.status) + '" title="' + esc(fmtDateTime(x.ts) + " · " + x.status) + '"></span>';
+        return '<span class="run-dot ' + esc(x.status) + '" title="' + esc(fmtDateTime(x.ts) + " · " + stLabel(x.status)) + '"></span>';
       }).join("");
       var html = '<div class="detail-grid">' +
         '<section class="detail-card"><h4>Job</h4><dl class="kv">' +
-        "<dt>stav</dt><dd><span class=\"pill pill-" + esc(j.status) + "\">" + esc(j.status) + "</span>" + (j.enabled ? "" : ' <span class="muted">(vypnutý)</span>') + "</dd>" +
+        "<dt>stav</dt><dd>" + statusPill(j.status) + (j.enabled ? "" : ' <span class="muted">(vypnutý)</span>') + "</dd>" +
         "<dt>id</dt><dd class=\"mono\">" + esc(j.id || "–") + "</dd>" +
         "<dt>rozvrh</dt><dd class=\"mono\">" + esc(j.schedule || "–") + "</dd>" +
-        "<dt>poslední run</dt><dd>" + esc(fmtDateTime(j.last_run_at)) + " (" + esc(rel(j.last_run_at, now)) + ")" + (j.last_status ? " · " + esc(j.last_status) : "") + "</dd>" +
-        "<dt>další run</dt><dd>" + esc(j.enabled ? fmtDateTime(j.next_run_at) + " (" + rel(j.next_run_at, now) + ")" : "–") + "</dd>" +
-        "<dt>failure streak</dt><dd>" + (j.failure_streak ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</dd>" +
+        "<dt>poslední běh</dt><dd>" + esc(fmtDateTime(j.last_run_at)) + " (" + esc(rel(j.last_run_at, now)) + ")" + (j.last_status ? " · " + esc(stLabel(j.last_status)) : "") + "</dd>" +
+        "<dt>další běh</dt><dd>" + esc(j.enabled ? fmtDateTime(j.next_run_at) + " (" + rel(j.next_run_at, now) + ")" : "–") + "</dd>" +
+        "<dt>chyb v řadě</dt><dd>" + (j.failure_streak ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</dd>" +
         (j.last_error ? '<dt>poslední chyba</dt><dd class="repo-err-full">' + esc(j.last_error) + "</dd>" : "") +
         "</dl></section>" +
         '<section class="detail-card"><h4>Statistika <span class="muted small">(posledních ' + d.count + " běhů)</span></h4>" +
@@ -1009,7 +1016,7 @@
       var renderRuns = function () {
         var list = d.runs.filter(function (x) { return !filter || x.status === filter; });
         $("d-runs").innerHTML = list.length ? list.map(function (x) {
-          return '<li class="run ' + esc(x.status) + '"><div class="run-head"><span class="pill pill-' + esc(x.status) + '">' + esc(x.status) + "</span>" +
+          return '<li class="run ' + esc(x.status) + '"><div class="run-head">' + statusPill(x.status) +
             "<span>" + esc(fmtDateTime(x.ts)) + ' <span class="muted">(' + esc(rel(x.ts, now)) + ")</span></span>" +
             (x.file ? '<span class="muted small mono">' + esc(x.file) + "</span>" : "") + "</div>" +
             (x.preview ? "<details" + (x.status === "error" ? " open" : "") + '><summary class="muted small">výstup</summary><pre>' + esc(x.preview) + (x.truncated ? "\n…" : "") + "</pre></details>" : "") +
@@ -1037,7 +1044,7 @@
         return '<option value="' + esc(p) + '"' + (p === r.profile ? " selected" : "") + ">" + esc(profileLabel(p)) + "</option>";
       }).join("") + "</select></label>" +
       '<div class="seg" id="d-inc-level" role="group" aria-label="minimální závažnost">' + ["", "warning", "error", "critical"].map(function (l) {
-        return '<button data-l="' + l + '"' + (l === r.level ? ' class="active"' : "") + ">" + (!l ? "vše" : l === "critical" ? l : l + "+") + "</button>";
+        return '<button data-l="' + l + '"' + (l === r.level ? ' class="active"' : "") + ">" + (!l ? "vše" : l === "critical" ? lvLabel(l) : lvLabel(l) + "+") + "</button>";
       }).join("") + "</div>" +
       '<div class="seg" id="d-inc-hours" role="group" aria-label="období">' + [["24", "24h"], ["72", "3d"], ["168", "7d"]].map(function (h) {
         return '<button data-h="' + h[0] + '"' + (h[0] === r.hours ? ' class="active"' : "") + ">" + h[1] + "</button>";
@@ -1071,7 +1078,7 @@
       $("d-inc-list").innerHTML = incidentItems(list.slice(0, 500), data.now) +
         (list.length > 500 ? '<li class="muted small">Zobrazeno prvních 500 z ' + list.length + " — zpřesni filtr.</li>" : "");
       $("d-inc-counts").innerHTML = LEVELS.slice().reverse().map(function (l) {
-        return '<span class="cnt ' + l + '">' + l + " " + (data.counts[l] || 0) + "</span>";
+        return '<span class="cnt ' + l + '">' + lvLabel(l) + " " + (data.counts[l] || 0) + "</span>";
       }).join("") + '<span class="muted small">zobrazeno ' + Math.min(list.length, 500) + " z " + data.incidents.length +
         (data.incidents.length < data.total ? " (" + data.total + " bez filtru závažnosti)" : "") + "</span>";
     };
@@ -1093,7 +1100,7 @@
     ["health", "HP", function (v, r) { return healthBadge({ score: v, level: r.health_level, factors: [] }); }, "min"],
     ["connected", "spojení", function (v) { return v === true ? '<span class="cell ok"></span>' : v === false ? '<span class="cell error"></span>' : '<span class="cell unknown"></span>'; }, null],
     ["errors_24h", "chyby 24h", function (v, r) { return String(v + r.critical_24h) + (r.critical_24h ? ' <span class="muted">(' + r.critical_24h + " krit.)</span>" : ""); }, "max", function (r) { return r.errors_24h + r.critical_24h; }],
-    ["warnings_24h", "warningy 24h", String, "max"],
+    ["warnings_24h", "varování 24h", String, "max"],
     ["jobs_failing", "joby v chybě", function (v, r) { return v + ' <span class="muted">/ ' + r.jobs_total + "</span>"; }, "max"],
     ["jobs_overdue", "po termínu", String, "max"],
     ["max_streak", "nejdelší streak", function (v, r) { return v ? '<span class="streak">' + v + "×</span>" + (r.max_streak_job ? ' <span class="muted">' + esc(r.max_streak_job) + "</span>" : "") : "0"; }, "max"],
@@ -1179,7 +1186,7 @@
   // -- global search ------------------------------------------------------------
   // Searches what the dashboard already loaded (agents, cron jobs, repos,
   // today's incidents, panels and views) — no extra backend calls.
-  function fold(t) { return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+  var fold = L.fold;
   var SEARCH_TYPES = { view: "pohled", panel: "panel", agent: "agent", cron: "cron job", repo: "GitHub", incident: "incident" };
   function searchIndex() {
     var st = window.__mcLastState || {}, items = [];
@@ -1195,12 +1202,12 @@
       items.push({ type: "panel", title: pn[1], sub: pn[2], panel: pn[0] });
     });
     (st.agents || []).forEach(function (a) {
-      items.push({ type: "agent", title: profileLabel(a.profile), sub: (a.connected === false ? "disconnected · " : "") + a.activity + (a.health ? " · HP " + a.health.score : ""),
+      items.push({ type: "agent", title: profileLabel(a.profile), sub: (a.connected === false ? L.CS.conn.disconnected + " · " : "") + L.activityLabel(a.activity) + (a.health ? " · HP " + a.health.score : ""),
         href: agentHref(a.profile), extra: a.platforms.map(function (p) { return p.platform; }).join(" "), color: PROFILE_COLORS[a.profile] });
     });
     (st.cron || []).forEach(function (c) {
       c.jobs.forEach(function (j) {
-        items.push({ type: "cron", title: j.name, sub: c.profile + " · " + (j.schedule || "") + " · " + j.status + (j.failure_streak ? " · " + j.failure_streak + "×" : ""),
+        items.push({ type: "cron", title: j.name, sub: c.profile + " · " + (j.schedule || "") + " · " + stLabel(j.status) + (j.failure_streak ? " · " + j.failure_streak + "×" : ""),
           href: jobHref(c.profile, j), extra: (j.id || "") + " " + c.profile, level: j.status === "error" ? "error" : "" });
       });
     });
@@ -1209,7 +1216,7 @@
         extra: (r.open_prs || []).map(function (p) { return "#" + p.number + " " + p.title; }).join(" ") });
     });
     (st.incidents || []).slice(0, 200).forEach(function (i) {
-      items.push({ type: "incident", title: i.message, sub: (i.profile || "") + " · " + i.level + " · " + (i.ts ? fmtDateTime(i.ts) : "bez času"),
+      items.push({ type: "incident", title: i.message, sub: (i.profile || "") + " · " + lvLabel(i.level) + " · " + (i.ts ? fmtDateTime(i.ts) : "bez času"),
         href: incidentsHash({ profile: i.profile || "", hours: "24", q: i.message.slice(0, 60) }), extra: (i.details || []).join(" ") + " " + (i.source || ""), level: i.level });
     });
     return items;

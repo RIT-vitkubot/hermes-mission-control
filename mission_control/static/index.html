@@ -32,7 +32,7 @@
     </div>
     <div class="topbar-mid">
       <span id="overall-pill" class="pill pill-unknown">…</span>
-      <span class="muted small hide-narrow">read-only · 0 LLM tokens</span>
+      <span class="muted small hide-narrow">jen čtení · 0 LLM tokenů</span>
       <span id="updated" class="updated" title="Kdy dashboard naposledy úspěšně načetl /api/state (polling každých 5 s)">…</span>
     </div>
     <div class="topbar-right">
@@ -40,7 +40,7 @@
       <span id="conn" class="conn" title="spojení s backendem"></span>
       <button id="search-btn" class="btn btn-sm btn-icon" type="button" title="Hledat na dashboardu (/)" aria-label="Hledat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
       <button id="help-btn" class="btn btn-sm btn-ghost" type="button" title="Klávesové zkratky (?)" aria-label="Klávesové zkratky">?</button>
-      <button id="restart-btn" class="btn btn-danger" type="button" title="Restart Hermes gateway">⟲ <span class="btn-label-full">Restart Hermes gateway</span><span class="btn-label-short">Restart</span></button>
+      <button id="restart-btn" class="btn btn-danger" type="button" title="Restartovat Hermes gateway">⟲ <span class="btn-label-full">Restartovat gateway</span><span class="btn-label-short">Restart</span></button>
     </div>
   </header>
 
@@ -121,7 +121,7 @@
 
       <article class="panel glass span-3" id="panel-tokens">
         <header class="panel-head">
-          <h3>Tokeny / náklady per profil <span class="muted small">(state.db, 14 dní)</span></h3>
+          <h3>Tokeny / náklady podle profilu <span class="muted small">(state.db, 14 dní)</span></h3>
           <div class="seg" id="token-mode"><button data-m="tokens" class="active">tokeny</button><button data-m="cost">$</button></div>
         </header>
         <div class="forecast" id="forecast"></div>
@@ -157,6 +157,7 @@
     <span class="hide-narrow">· Zkratky: <kbd>?</kbd></span>
   </footer>
 
+  <script src="/lib.js"></script>
   <script src="/app.js"></script>
   <script type="module" src="/bmo.js"></script>
 </body>
