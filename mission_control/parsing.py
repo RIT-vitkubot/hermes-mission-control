@@ -4,6 +4,8 @@ Everything here works on already-loaded text or Python objects so it can be
 unit-tested without touching the host. No I/O, no subprocesses, no LLM calls.
 """
 
+import csv
+import io
 import json
 import re
 from datetime import datetime, timezone
@@ -620,6 +622,10 @@ _RUN_FAIL_RE = re.compile(r"^#+\s*(?:error|failed|failure|traceback)\b|\((?:fail
 _RUN_SECTION_RE = re.compile(r"^#+\s*(response|output|result|error)\b.*$", re.I | re.M)
 
 
+# longer gaps between file name and mtime are edits/copies, not run time
+MAX_RUN_SECONDS = 6 * 3600
+
+
 def run_ts_from_name(name):
     """``2026-10-08_07-00-03.md`` -> epoch seconds (host-local), else None."""
     m = _RUN_NAME_RE.match(name)
@@ -635,8 +641,12 @@ def parse_cron_run(name, text, mtime=None, preview_chars=600):
     like ``# Cron Job: x (FAILED)`` or ``## Error`` means the run failed.
     """
     ts = run_ts_from_name(name)
+    duration = None
     if ts is None:
         ts = mtime
+    elif mtime is not None and 0 <= mtime - ts <= MAX_RUN_SECONDS:
+        # file is named when the run starts and written when it ends
+        duration = round(mtime - ts, 1)
     text = text or ""
     head = text[:4000]
     status = "error" if _RUN_FAIL_RE.search(head) else "ok"
@@ -644,7 +654,7 @@ def parse_cron_run(name, text, mtime=None, preview_chars=600):
     body = text[m.end():] if m else text
     preview = body.strip()[:preview_chars]
     return {"file": name, "ts": ts, "status": status, "size": len(text.encode("utf-8")),
-            "preview": preview, "truncated": len(body.strip()) > preview_chars}
+            "duration": duration, "preview": preview, "truncated": len(body.strip()) > preview_chars}
 
 
 def run_history(runs, limit=50):
@@ -660,6 +670,12 @@ def run_history(runs, limit=50):
         "success_rate": (ok / float(len(runs))) if runs else None,
         "median_interval": sorted(gaps)[len(gaps) // 2] if gaps else None,
     }
+
+
+def job_spark(runs, n=12):
+    """Last ``n`` runs, oldest first, trimmed for the cron table sparkline."""
+    runs = sorted(runs, key=lambda r: r["ts"] or 0)[-n:]
+    return [{"ts": r["ts"], "status": r["status"], "duration": r.get("duration")} for r in runs]
 
 
 def find_job(summary, key):
@@ -966,6 +982,138 @@ def attribute_process(cmdline, profiles=PROFILES):
                 ("/profiles/%s/" % p) in cmdline:
             return p
     return None
+
+
+# ---------------------------------------------------------------------------
+# Per-profile health score (pure aggregation, shown on agent cards)
+# ---------------------------------------------------------------------------
+
+HEALTH_WEIGHTS = {
+    "disconnected": 40,
+    "failing_job": 15, "streak_3": 10, "failing_cap": 50,
+    "overdue_job": 10, "overdue_cap": 20, "overdue_grace": 900,
+    "critical": 15, "error": 5, "warning": 1, "incident_cap": 40,
+    "quota_90": 10, "quota_75": 5,
+}
+
+
+def overdue_jobs(cron_summary, now, grace=HEALTH_WEIGHTS["overdue_grace"]):
+    """Enabled jobs whose ``next_run_at`` is more than ``grace`` s in the past."""
+    return [j for j in cron_summary.get("jobs", [])
+            if j.get("enabled") and j.get("status") != "paused"
+            and j.get("next_run_at") and now - j["next_run_at"] > grace]
+
+
+def profile_health(connected, cron_summary, incidents, usage_latest=None, now=None, w=HEALTH_WEIGHTS):
+    """0-100 score for one profile from its connection, cron and incidents.
+
+    ``incidents`` should already be limited to the profile and the last 24 h.
+    Failing jobs are counted from ``jobs.json``; incidents derived from the
+    same jobs (``cron/jobs.json`` / ``hermes cron incidents``) are skipped so
+    one failure is not penalised twice. Quota is shared by all profiles and
+    only weighs a little. A job failing 3× in a row costs extra. Returns ``{score, level, factors: [{label, penalty}]}``.
+    """
+    factors = []
+    if connected is False:
+        factors.append(("odpojeno", w["disconnected"]))
+    failing = [j for j in (cron_summary or {}).get("jobs", []) if j.get("status") == "error"]
+    if failing:
+        n = len(failing)
+        penalty = sum(w["failing_job"] + (w["streak_3"] if j.get("failure_streak", 0) >= 3 else 0)
+                      for j in failing)
+        factors.append(("%d cron %s v chybě" % (n, _plural_cs(n, "job", "joby", "jobů")),
+                        min(w["failing_cap"], penalty)))
+    if now is not None and cron_summary:
+        late = len(overdue_jobs(cron_summary, now))
+        if late:
+            factors.append(("%d %s po termínu" % (late, _plural_cs(late, "job", "joby", "jobů")),
+                            min(w["overdue_cap"], late * w["overdue_job"])))
+    counts = {}
+    for i in incidents or []:
+        src = str(i.get("source") or "")
+        if src == "cron/jobs.json" or src == "hermes cron incidents":
+            continue
+        counts[i.get("level")] = counts.get(i.get("level"), 0) + 1
+    inc_penalty = sum(counts.get(k, 0) * w[k] for k in ("critical", "error", "warning"))
+    if inc_penalty:
+        parts = ["%d× %s" % (counts[k], k) for k in ("critical", "error", "warning") if counts.get(k)]
+        factors.append(("log 24h: " + ", ".join(parts), min(w["incident_cap"], inc_penalty)))
+    week = (usage_latest or {}).get("week_pct")
+    if week is not None and week >= 75:
+        factors.append(("týdenní kvóta %d %% (sdílená)" % round(week), w["quota_90"] if week >= 90 else w["quota_75"]))
+    score = max(0, 100 - sum(p for _, p in factors))
+    level = "ok" if score >= 90 else ("warn" if score >= 60 else "error")
+    return {"score": score, "level": level,
+            "factors": [{"label": label, "penalty": p} for label, p in factors]}
+
+
+# ---------------------------------------------------------------------------
+# Export (CSV / JSON) of data the dashboard already shows
+# ---------------------------------------------------------------------------
+
+def _csv_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return ("%.6f" % value).rstrip("0").rstrip(".")
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        value = " | ".join(str(v) for v in value)
+    value = str(value)
+    # log lines end up in spreadsheets: never let them start a formula
+    if value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        value = "'" + value
+    return value
+
+
+def to_csv(rows, columns):
+    """Render ``rows`` (dicts) as CSV with a header; unknown keys are ignored."""
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([_csv_cell(row.get(c)) for c in columns])
+    return buf.getvalue()
+
+
+USAGE_EXPORT_COLUMNS = ["time", "ts", "session_pct", "week_pct", "session_reset", "week_reset"]
+INCIDENT_EXPORT_COLUMNS = ["time", "ts", "level", "profile", "source", "message", "details"]
+
+
+def usage_export_rows(points):
+    return [dict(p, time=iso(p["ts"])) for p in points]
+
+
+def incident_export_rows(incidents):
+    return [dict(i, time=iso(i["ts"]) if i.get("ts") else None) for i in incidents]
+
+
+def token_export_rows(tokens):
+    """Flatten ``/api/tokens`` into one row per profile and day.
+
+    Returns ``(rows, columns)``; token/cost columns come from the data.
+    """
+    metric_cols = []
+    for p in tokens.get("profiles", []):
+        for bucket in p.get("days", {}).values():
+            for k in bucket:
+                if k not in metric_cols and k != "total_tokens":
+                    metric_cols.append(k)
+    metric_cols.sort(key=lambda k: (k.endswith("_usd"), k))
+    rows = []
+    for day in tokens.get("day_keys", []):
+        for p in tokens.get("profiles", []):
+            if not p.get("available"):
+                continue
+            bucket = p["days"].get(day) or {}
+            row = {"day": day, "profile": p["profile"], "total_tokens": day_tokens(bucket),
+                   "cost_usd": day_cost(bucket)}
+            row.update(bucket)
+            rows.append(row)
+    return rows, ["day", "profile", "total_tokens", "cost_usd"] + metric_cols
 
 
 def json_dumps(obj):

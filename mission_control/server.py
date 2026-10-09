@@ -12,6 +12,9 @@ Endpoints::
     GET  /api/agent-log?profile=&lines=     longer agent.log tail (detail view)
     GET  /api/cron/runs?profile=&job=&limit= run history of one cron job
     GET  /api/incidents?profile=&level=&hours= incidents up to 7 days back
+    GET  /api/compare?days=  profiles side by side (health, cron, incidents, tokens)
+    GET  /api/export?kind=usage|tokens|incidents|compare&format=csv|json
+                            download of data the dashboard shows
     POST /api/restart       runs `hermes gateway restart` (no auth, by design)
 
 No LLM API is ever called by this process.
@@ -43,7 +46,10 @@ STATIC_FILES = {
     "/icon-192.png": ("icon-192.png", "image/png"),
     "/icon-512.png": ("icon-512.png", "image/png"),
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/sw.js": ("sw.js", "application/javascript; charset=utf-8"),
+    "/offline.html": ("offline.html", "text/html; charset=utf-8"),
 }
+EXPORT_KINDS = ("usage", "tokens", "incidents", "compare")
 
 log = logging.getLogger("mission_control")
 STARTED_AT = time.time()
@@ -94,6 +100,26 @@ def make_handler(collector):
         def _json(self, obj, code=200):
             self._send(code, parsing.json_dumps(obj), "application/json; charset=utf-8")
 
+        def _export(self, qs):
+            kind = (qs.get("kind") or [""])[0]
+            fmt = (qs.get("format") or ["csv"])[0]
+            if kind not in EXPORT_KINDS or fmt not in ("csv", "json"):
+                return self._json({"error": "kind must be one of %s, format csv|json" % "|".join(EXPORT_KINDS)}, 400)
+            profile, err = profile_param(qs, collector.cfg.profiles, required=False)
+            level = (qs.get("level") or [""])[0] or None
+            if err or (level is not None and level not in parsing.SEVERITY_ORDER):
+                return self._json({"error": err or "unknown level"}, 400)
+            rows, columns = collector.export(
+                kind, window=(qs.get("window") or ["all"])[0], days=int_param(qs, "days", 14, 1, 90),
+                profile=profile, min_level=level, hours=int_param(qs, "hours", 24, 1, 168))
+            name = "hermes-%s-%s.%s" % (kind, time.strftime("%Y%m%d-%H%M"), fmt)
+            disp = {"Content-Disposition": 'attachment; filename="%s"' % name}
+            if fmt == "json":
+                return self._send(200, parsing.json_dumps({"kind": kind, "columns": columns, "rows": rows}),
+                                  "application/json; charset=utf-8", disp)
+            # BOM so Excel opens UTF-8 (Czech diacritics) correctly
+            return self._send(200, "\ufeff" + parsing.to_csv(rows, columns), "text/csv; charset=utf-8", disp)
+
         # -- GET ---------------------------------------------------------
         def do_HEAD(self):
             self.do_GET()
@@ -142,6 +168,10 @@ def make_handler(collector):
                         return self._json({"error": "unknown level"}, 400)
                     return self._json(collector.incidents_detail(
                         profile, level, int_param(qs, "hours", 24, 1, 168), int_param(qs, "limit", 1000, 1, 5000)))
+                if path == "/api/compare":
+                    return self._json(collector.compare(int_param(qs, "days", 14, 1, 90)))
+                if path == "/api/export":
+                    return self._export(qs)
                 if path in STATIC_FILES:
                     name, ctype = STATIC_FILES[path]
                     with open(os.path.join(STATIC_DIR, name), "rb") as fh:

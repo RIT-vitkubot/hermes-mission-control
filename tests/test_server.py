@@ -85,6 +85,23 @@ class DetailEndpointsTest(unittest.TestCase):
             manifest = json.loads(r.read())
         self.assertEqual(manifest["start_url"], "/")
 
+    def test_compare_and_export(self):
+        code, body = self.get("/api/compare")
+        self.assertEqual((code, len(body["rows"])), (200, 6))
+        with urlopen(self.base + "/api/export?kind=incidents&format=csv&hours=168") as r:
+            self.assertTrue(r.headers["Content-Type"].startswith("text/csv"))
+            self.assertIn('attachment; filename="hermes-incidents-', r.headers["Content-Disposition"])
+            text = r.read().decode("utf-8")
+        self.assertTrue(text.startswith("\ufefftime,ts,level,profile,source,message,details\r\n"))
+        code, body = self.get("/api/export?kind=usage&format=json&window=6h")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["columns"][:2], ["time", "ts"])
+        self.assertTrue(body["rows"])
+        self.assertEqual(self.get("/api/export?kind=secrets")[0], 400)
+        self.assertEqual(self.get("/api/export?kind=usage&format=xml")[0], 400)
+        self.assertEqual(self.get("/api/export?kind=incidents&profile=../x")[0], 400)
+        self.assertEqual(self.get("/api/export?kind=incidents&level=bogus")[0], 400)
+
     def test_validation(self):
         self.assertEqual(self.get("/api/agent-log")[0], 400)
         self.assertEqual(self.get("/api/agent-log?profile=nope")[0], 400)

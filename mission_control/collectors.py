@@ -107,6 +107,16 @@ def read_text(path, max_bytes=None):
     return data.decode("utf-8", errors="replace")
 
 
+def read_head(path, max_bytes):
+    """First ``max_bytes`` of a text file, or None if missing."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(max_bytes)
+    except (IOError, OSError):
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
 def tail_lines(path, n=40, max_bytes=256 * 1024):
     text = read_text(path, max_bytes=max_bytes)
     if text is None:
@@ -299,19 +309,13 @@ class Collector(object):
                 "requested": n}
 
     # -- 4b. cron run history ---------------------------------------------
-    def cron_runs(self, profile, job_key, limit=50):
-        """Run history of one job from ``<home>/cron/output/<job_id>/*.md``.
+    def _job_run_files(self, profile, job):
+        """``(source, [(ts, name, path, mtime)])`` newest first for one job.
 
-        Falls back to the single last run recorded in ``jobs.json`` when no
-        output directory exists. Only files directly inside that directory
-        are read (job ids from jobs.json are never used as a path otherwise).
+        Only files directly inside ``<home>/cron/output/<id or name>/`` are
+        listed (job ids from jobs.json are never used as a path otherwise).
         """
-        summary = self.cron(profile)
-        job = parsing.find_job(summary, job_key)
-        if job is None:
-            return {"profile": profile, "found": False, "job": None, "runs": [], "count": 0}
         out_root = os.path.join(self.cfg.profile_home(profile), "cron", "output")
-        runs, source = [], None
         for name in (job.get("id"), job.get("name")):
             name = str(name) if name is not None else ""
             if not name or os.path.basename(name) != name or name in (".", ".."):
@@ -321,7 +325,6 @@ class Collector(object):
                 files = os.listdir(job_dir)
             except OSError:
                 continue
-            source = "cron/output/%s" % name
             # newest first by file name (timestamped), then mtime as tie-breaker
             entries = []
             for f in files:
@@ -334,17 +337,53 @@ class Collector(object):
                     continue
                 entries.append((parsing.run_ts_from_name(f) or mtime, f, path, mtime))
             entries.sort(reverse=True)
-            for _ts, f, path, mtime in entries[:limit]:
-                runs.append(parsing.parse_cron_run(f, read_text(path, max_bytes=64 * 1024), mtime=mtime))
-            break
+            return "cron/output/%s" % name, entries
+        return None, []
+
+    @staticmethod
+    def _fallback_run(job):
+        return {"file": None, "ts": job["last_run_at"], "size": None, "truncated": False, "duration": None,
+                "status": "error" if job["status"] == "error" else "ok",
+                "preview": str(job.get("last_error") or job.get("last_status") or "")}
+
+    def cron_runs(self, profile, job_key, limit=50):
+        """Run history of one job from ``<home>/cron/output/<job_id>/*.md``.
+
+        Falls back to the single last run recorded in ``jobs.json`` when no
+        output directory exists.
+        """
+        summary = self.cron(profile)
+        job = parsing.find_job(summary, job_key)
+        if job is None:
+            return {"profile": profile, "found": False, "job": None, "runs": [], "count": 0}
+        source, entries = self._job_run_files(profile, job)
+        runs = [parsing.parse_cron_run(f, read_text(path, max_bytes=64 * 1024), mtime=mtime)
+                for _ts, f, path, mtime in entries[:limit]]
         if source is None and job.get("last_run_at"):
             source = "cron/jobs.json"
-            runs = [{"file": None, "ts": job["last_run_at"], "size": None, "truncated": False,
-                     "status": "error" if job["status"] == "error" else "ok",
-                     "preview": str(job.get("last_error") or job.get("last_status") or "")}]
+            runs = [self._fallback_run(job)]
         out = parsing.run_history(runs, limit)
         out.update({"profile": profile, "found": True, "job": job, "source": source})
         return out
+
+    def cron_recent(self, profile, n=12):
+        """``{job id or name: [last n runs, oldest first]}`` for sparklines.
+
+        Reads only the first 4 KiB of each output file (enough for the status
+        heading) and is cached for a minute.
+        """
+        def load():
+            out = {}
+            for job in self.cron(profile).get("jobs", []):
+                source, entries = self._job_run_files(profile, job)
+                runs = [parsing.parse_cron_run(f, read_head(path, 4096), mtime=mtime)
+                        for _ts, f, path, mtime in entries[:n]]
+                if source is None and job.get("last_run_at"):
+                    runs = [self._fallback_run(job)]
+                out[str(job.get("id") or job["name"])] = parsing.job_spark(runs, n)
+            return out
+
+        return self.cache.get("cron-recent:%s:%d" % (profile, n), 60, load)
 
     # -- 5. errors / incidents -------------------------------------------
     def error_log(self, profile, since):
@@ -536,10 +575,20 @@ class Collector(object):
             })
 
     # -- aggregate ---------------------------------------------------------
+    def cron_with_runs(self, profile):
+        """Cron summary copy whose jobs carry ``recent`` (sparkline) runs."""
+        summary = self.cron(profile)
+        recent = self.cron_recent(profile)
+        jobs = [dict(j, recent=recent.get(str(j.get("id") or j["name"]), [])) for j in summary["jobs"]]
+        return dict(summary, jobs=jobs)
+
     def state(self):
         gateway = self.gateway()
-        crons = [self.cron(p) for p in self.cfg.profiles]
+        crons = [self.cron_with_runs(p) for p in self.cfg.profiles]
         incidents = self.incidents(crons)
+        usage_pts = self.usage_points()
+        latest = usage_pts[-1] if usage_pts else None
+        now = time.time()
         procs = self.processes(gateway.get("pid")) if gateway.get("pid_alive") else None
         agents = []
         for p, cron in zip(self.cfg.profiles, crons):
@@ -563,12 +612,13 @@ class Collector(object):
                                               "next_run_at", "next_job")},
                 "processes": len([x for x in procs if x["profile"] == p]) if procs is not None else None,
                 "log_tail": self.agent_log(p),
+                "health": parsing.profile_health(connected, cron,
+                                                 [i for i in incidents if i.get("profile") == p],
+                                                 latest, now=now),
             })
-        usage_pts = self.usage_points()
-        latest = usage_pts[-1] if usage_pts else None
-        summary = parsing.overall_status(gateway, crons, incidents, latest, now=time.time())
+        summary = parsing.overall_status(gateway, crons, incidents, latest, now=now)
         return {
-            "now": time.time(),
+            "now": now,
             "tz": host_tz(),
             "summary": summary,
             "gateway": gateway,
@@ -584,6 +634,69 @@ class Collector(object):
             "usage_latest": latest,
             "restarts": self.restart_events(10),
         }
+
+
+    # -- comparison across profiles ----------------------------------------
+    def compare(self, days=14):
+        """One row per profile for the side-by-side comparison view."""
+        st = self.state()
+        tokens = {p["profile"]: p for p in self.tokens(days)["profiles"]}
+        crons = {c["profile"]: c for c in st["cron"]}
+        rows = []
+        for a in st["agents"]:
+            p = a["profile"]
+            cron = crons.get(p, {"jobs": [], "counts": {}})
+            jobs = cron["jobs"]
+            runs = [(j["name"], r) for j in jobs for r in j.get("recent", [])]
+            timed = [(name, r["duration"]) for name, r in runs if r.get("duration") is not None]
+            longest = max(timed, key=lambda x: x[1]) if timed else None
+            streak_job = max(jobs, key=lambda j: j["failure_streak"]) if jobs else None
+            incs = [i for i in st["incidents"] if i.get("profile") == p]
+            tok = tokens.get(p, {})
+            days_ = tok.get("days", {}).values()
+            ok_runs = len([r for _, r in runs if r["status"] == "ok"])
+            rows.append({
+                "profile": p,
+                "label": a["label"],
+                "health": a["health"]["score"],
+                "health_level": a["health"]["level"],
+                "connected": a["connected"],
+                "busy": a["busy"],
+                "processes": a["processes"],
+                "jobs_total": len(jobs),
+                "jobs_failing": cron.get("counts", {}).get("error", 0),
+                "jobs_overdue": len(parsing.overdue_jobs(cron, st["now"])),
+                "max_streak": streak_job["failure_streak"] if streak_job else 0,
+                "max_streak_job": streak_job["name"] if streak_job and streak_job["failure_streak"] else None,
+                "longest_run_seconds": longest[1] if longest else None,
+                "longest_run_job": longest[0] if longest else None,
+                "run_success_rate": round(ok_runs / float(len(runs)), 3) if runs else None,
+                "incidents_24h": len(incs),
+                "critical_24h": len([i for i in incs if i["level"] == "critical"]),
+                "errors_24h": len([i for i in incs if i["level"] == "error"]),
+                "warnings_24h": len([i for i in incs if i["level"] == "warning"]),
+                "tokens": round(sum(parsing.day_tokens(b) for b in days_)) if tok.get("available") else None,
+                "cost_usd": round(sum(parsing.day_cost(b) for b in tok.get("days", {}).values()), 4)
+                if tok.get("available") else None,
+            })
+        return {"now": st["now"], "days": days, "rows": rows}
+
+    # -- export -------------------------------------------------------------
+    def export(self, kind, window="all", days=14, profile=None, min_level=None, hours=24):
+        """``(rows, columns)`` for CSV/JSON export, or None for unknown kind."""
+        if kind == "usage":
+            points = self.usage_points() or []
+            rows = parsing.filter_window(points, window if window in parsing.WINDOWS else "all", time.time())
+            return parsing.usage_export_rows(rows), parsing.USAGE_EXPORT_COLUMNS
+        if kind == "tokens":
+            return parsing.token_export_rows(self.tokens(days))
+        if kind == "incidents":
+            res = self.incidents_detail(profile, min_level, hours, limit=None)
+            return parsing.incident_export_rows(res["incidents"]), parsing.INCIDENT_EXPORT_COLUMNS
+        if kind == "compare":
+            rows = self.compare(days)["rows"]
+            return rows, list(rows[0].keys()) if rows else ["profile"]
+        return None
 
 
 def read_token_usage(path, since):

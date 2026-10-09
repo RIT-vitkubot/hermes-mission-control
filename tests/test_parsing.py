@@ -421,5 +421,78 @@ class DetailViewsTest(unittest.TestCase):
         self.assertIsNone(parsing.find_job(summary, "nope"))
         self.assertIsNone(parsing.find_job(summary, None))
 
+class Round4Test(unittest.TestCase):
+    NOW = 1_000_000.0
+
+    def summary(self, jobs):
+        return parsing.summarize_jobs(jobs, "skola")
+
+    def test_run_duration_from_mtime(self):
+        start = parsing.run_ts_from_name("2026-10-08_07-00-03.md")
+        r = parsing.parse_cron_run("2026-10-08_07-00-03.md", "## Response\nok", mtime=start + 95)
+        self.assertEqual(r["duration"], 95)
+        # mtime before the start or days later (copied/edited file) -> unknown
+        self.assertIsNone(parsing.parse_cron_run("2026-10-08_07-00-03.md", "", mtime=start - 5)["duration"])
+        self.assertIsNone(parsing.parse_cron_run("2026-10-08_07-00-03.md", "", mtime=start + 86400)["duration"])
+        self.assertIsNone(parsing.parse_cron_run("notes.md", "", mtime=start)["duration"])
+
+    def test_job_spark(self):
+        runs = [{"ts": t, "status": "ok", "duration": None, "preview": "x"} for t in (5, 1, 3, 4, 2)]
+        spark = parsing.job_spark(runs, n=3)
+        self.assertEqual([r["ts"] for r in spark], [3, 4, 5])
+        self.assertNotIn("preview", spark[0])
+
+    def test_health_perfect_and_disconnected(self):
+        ok = parsing.profile_health(True, self.summary([{"name": "a", "last_status": "ok"}]), [], now=self.NOW)
+        self.assertEqual((ok["score"], ok["level"], ok["factors"]), (100, "ok", []))
+        down = parsing.profile_health(False, self.summary([]), [], now=self.NOW)
+        self.assertEqual((down["score"], down["level"]), (60, "warn"))
+
+    def test_health_cron_and_overdue(self):
+        jobs = [{"name": "a", "failure_streak": 1},
+                {"name": "b", "failure_streak": 4},
+                {"name": "late", "last_status": "ok", "next_run_at": self.NOW - 3600},
+                {"name": "paused", "enabled": False, "next_run_at": self.NOW - 3600},
+                {"name": "soon", "last_status": "ok", "next_run_at": self.NOW - 60}]
+        h = parsing.profile_health(True, self.summary(jobs), [], now=self.NOW)
+        # 15 + (15 + 10 for streak >= 3) + 10 overdue (paused / within grace ignored)
+        self.assertEqual(h["score"], 50)
+        self.assertEqual(h["level"], "error")
+        self.assertEqual([f["penalty"] for f in h["factors"]], [40, 10])
+        self.assertEqual(len(parsing.overdue_jobs(self.summary(jobs), self.NOW)), 1)
+
+    def test_health_incidents_and_quota(self):
+        incs = ([{"level": "error", "source": "logs/errors.log"}] * 3 +
+                [{"level": "warning", "source": "logs/errors.log"}] * 2 +
+                [{"level": "critical", "source": "cron/jobs.json"},  # counted via jobs, not twice
+                 {"level": "error", "source": "hermes cron incidents"}])
+        h = parsing.profile_health(None, self.summary([]), incs, {"week_pct": 92}, now=self.NOW)
+        self.assertEqual(h["score"], 100 - 17 - 10)
+        self.assertIn("3× error", h["factors"][0]["label"])
+        many = parsing.profile_health(True, None, [{"level": "critical", "source": "x"}] * 10, now=self.NOW)
+        self.assertEqual(many["score"], 60)  # incident penalty is capped
+
+    def test_csv(self):
+        rows = [{"a": "=HYPERLINK(1)", "b": -5, "c": 0.125, "d": ["x", "y"], "e": None, "f": True},
+                {"a": 'quote "q", comma', "b": 1}]
+        out = parsing.to_csv(rows, ["a", "b", "c", "d", "e", "f"])
+        lines = out.split("\r\n")
+        self.assertEqual(lines[0], "a,b,c,d,e,f")
+        self.assertEqual(lines[1], "'=HYPERLINK(1),-5,0.125,x | y,,true")
+        self.assertEqual(lines[2], '"quote ""q"", comma",1,,,,')
+
+    def test_token_export_rows(self):
+        tokens = {"day_keys": ["2026-10-01", "2026-10-02"], "profiles": [
+            {"profile": "default", "available": True,
+             "days": {"2026-10-02": {"input_tokens": 10.0, "output_tokens": 5.0, "estimated_cost_usd": 0.5}}},
+            {"profile": "skola", "available": False, "days": {}}]}
+        rows, cols = parsing.token_export_rows(tokens)
+        self.assertEqual(cols, ["day", "profile", "total_tokens", "cost_usd", "input_tokens", "output_tokens",
+                                "estimated_cost_usd"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual((rows[1]["total_tokens"], rows[1]["cost_usd"]), (15.0, 0.5))
+        self.assertEqual(rows[0]["total_tokens"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
