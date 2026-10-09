@@ -253,13 +253,67 @@ class Collector(object):
         return self.cache.get("cron:" + profile, 5, load)
 
     # -- 3b. agent log tail ------------------------------------------------
-    def agent_log(self, profile, n=8):
+    def agent_log(self, profile, n=8, max_bytes=256 * 1024):
         home = self.cfg.profile_home(profile)
         for rel in ("agent.log", os.path.join("logs", "agent.log")):
-            lines = tail_lines(os.path.join(home, rel), n)
+            lines = tail_lines(os.path.join(home, rel), n, max_bytes=max_bytes)
             if lines is not None:
                 return lines
         return None
+
+    def agent_log_detail(self, profile, n=300):
+        """Longer ``agent.log`` tail for the profile detail view."""
+        lines = self.agent_log(profile, n, max_bytes=1024 * 1024)
+        return {"profile": profile, "available": lines is not None, "lines": lines or [],
+                "requested": n}
+
+    # -- 4b. cron run history ---------------------------------------------
+    def cron_runs(self, profile, job_key, limit=50):
+        """Run history of one job from ``<home>/cron/output/<job_id>/*.md``.
+
+        Falls back to the single last run recorded in ``jobs.json`` when no
+        output directory exists. Only files directly inside that directory
+        are read (job ids from jobs.json are never used as a path otherwise).
+        """
+        summary = self.cron(profile)
+        job = parsing.find_job(summary, job_key)
+        if job is None:
+            return {"profile": profile, "found": False, "job": None, "runs": [], "count": 0}
+        out_root = os.path.join(self.cfg.profile_home(profile), "cron", "output")
+        runs, source = [], None
+        for name in (job.get("id"), job.get("name")):
+            name = str(name) if name is not None else ""
+            if not name or os.path.basename(name) != name or name in (".", ".."):
+                continue
+            job_dir = os.path.join(out_root, name)
+            try:
+                files = os.listdir(job_dir)
+            except OSError:
+                continue
+            source = "cron/output/%s" % name
+            # newest first by file name (timestamped), then mtime as tie-breaker
+            entries = []
+            for f in files:
+                path = os.path.join(job_dir, f)
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                entries.append((parsing.run_ts_from_name(f) or mtime, f, path, mtime))
+            entries.sort(reverse=True)
+            for _ts, f, path, mtime in entries[:limit]:
+                runs.append(parsing.parse_cron_run(f, read_text(path, max_bytes=64 * 1024), mtime=mtime))
+            break
+        if source is None and job.get("last_run_at"):
+            source = "cron/jobs.json"
+            runs = [{"file": None, "ts": job["last_run_at"], "size": None, "truncated": False,
+                     "status": "error" if job["status"] == "error" else "ok",
+                     "preview": str(job.get("last_error") or job.get("last_status") or "")}]
+        out = parsing.run_history(runs, limit)
+        out.update({"profile": profile, "found": True, "job": job, "source": source})
+        return out
 
     # -- 5. errors / incidents -------------------------------------------
     def error_log(self, profile, since):
@@ -298,6 +352,26 @@ class Collector(object):
 
         result = self.cache.get("incidents:" + profile, 60, load, background=True, default=None)
         return result if isinstance(result, list) else None
+
+    def incidents_detail(self, profile=None, min_level=None, hours=24, limit=1000):
+        """Wider incident list for the incident detail view (up to 7 days).
+
+        The CLI fallbacks only ever cover their own window (24 h), log files
+        are read up to their last 512 KiB.
+        """
+        now = time.time()
+        since = now - hours * 3600
+        profiles = [profile] if profile else list(self.cfg.profiles)
+        groups = []
+        for p in profiles:
+            groups.append(self.error_log(p, since))
+            cli = self.cron_incidents_cli(p)
+            groups.append(cli if cli is not None else parsing.incidents_from_jobs(self.cron(p)))
+        merged = parsing.merge_incidents(*groups, limit=None)
+        all_counts = parsing.count_levels(merged)
+        items = parsing.filter_incidents(merged, min_level=min_level, since=since, limit=limit)
+        return {"now": now, "hours": hours, "profile": profile, "min_level": min_level,
+                "counts": all_counts, "total": len(merged), "incidents": items}
 
     def incidents(self, cron_summaries=None):
         now = time.time()

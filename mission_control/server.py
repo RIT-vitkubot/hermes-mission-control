@@ -8,6 +8,9 @@ Endpoints::
     GET  /api/usage?window= Claude quota history (6h|24h|7d|30d|all)
     GET  /api/tokens?days=  per-profile token/cost aggregates from state.db
     GET  /api/github        repo + open PR status (cached 5 min)
+    GET  /api/agent-log?profile=&lines=     longer agent.log tail (detail view)
+    GET  /api/cron/runs?profile=&job=&limit= run history of one cron job
+    GET  /api/incidents?profile=&level=&hours= incidents up to 7 days back
     POST /api/restart       runs `hermes gateway restart` (no auth, by design)
 
 No LLM API is ever called by this process.
@@ -38,6 +41,25 @@ STATIC_FILES = {
 
 log = logging.getLogger("mission_control")
 STARTED_AT = time.time()
+
+
+def int_param(qs, name, default, lo, hi):
+    """Clamp an integer query parameter; bad values fall back to ``default``."""
+    try:
+        value = int((qs.get(name) or [default])[0])
+    except (TypeError, ValueError):
+        value = default
+    return max(lo, min(hi, value))
+
+
+def profile_param(qs, profiles, required=True):
+    """Return ``(profile, error)``; profile must be one of the configured ones."""
+    value = (qs.get("profile") or [""])[0].strip()
+    if not value:
+        return None, ("missing profile" if required else None)
+    if value not in profiles:
+        return None, "unknown profile"
+    return value, None
 
 
 def make_handler(collector):
@@ -91,6 +113,27 @@ def make_handler(collector):
                     return self._json(collector.tokens(days))
                 if path == "/api/github":
                     return self._json(collector.github())
+                if path == "/api/agent-log":
+                    profile, err = profile_param(qs, collector.cfg.profiles)
+                    if err:
+                        return self._json({"error": err}, 400)
+                    return self._json(collector.agent_log_detail(profile, int_param(qs, "lines", 300, 10, 2000)))
+                if path == "/api/cron/runs":
+                    profile, err = profile_param(qs, collector.cfg.profiles)
+                    job = (qs.get("job") or [""])[0]
+                    if err or not job:
+                        return self._json({"error": err or "missing job"}, 400)
+                    res = collector.cron_runs(profile, job, int_param(qs, "limit", 50, 1, 200))
+                    return self._json(res, 200 if res["found"] else 404)
+                if path == "/api/incidents":
+                    profile, err = profile_param(qs, collector.cfg.profiles, required=False)
+                    if err:
+                        return self._json({"error": err}, 400)
+                    level = (qs.get("level") or [""])[0] or None
+                    if level is not None and level not in parsing.SEVERITY_ORDER:
+                        return self._json({"error": "unknown level"}, 400)
+                    return self._json(collector.incidents_detail(
+                        profile, level, int_param(qs, "hours", 24, 1, 168), int_param(qs, "limit", 1000, 1, 5000)))
                 if path in STATIC_FILES:
                     name, ctype = STATIC_FILES[path]
                     with open(os.path.join(STATIC_DIR, name), "rb") as fh:

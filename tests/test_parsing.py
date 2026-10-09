@@ -236,5 +236,65 @@ class GithubAndProcTest(unittest.TestCase):
         self.assertIsNone(parsing.attribute_process("python worker.py"))
 
 
+
+class DetailViewsTest(unittest.TestCase):
+    ENTRIES = [
+        {"ts": 300, "level": "critical", "profile": "skola", "message": "a"},
+        {"ts": 200, "level": "warning", "profile": "default", "message": "b"},
+        {"ts": 100, "level": "error", "profile": "default", "message": "c"},
+        {"ts": None, "level": "info", "profile": "skola", "message": "d"},
+    ]
+
+    def test_filter_incidents(self):
+        f = parsing.filter_incidents
+        self.assertEqual(len(f(self.ENTRIES)), 4)
+        self.assertEqual([e["message"] for e in f(self.ENTRIES, profile="default")], ["b", "c"])
+        self.assertEqual([e["message"] for e in f(self.ENTRIES, min_level="error")], ["a", "c"])
+        # entries without ts are kept, old ones dropped
+        self.assertEqual([e["message"] for e in f(self.ENTRIES, since=150)], ["a", "b", "d"])
+        self.assertEqual(len(f(self.ENTRIES, limit=2)), 2)
+        self.assertEqual(parsing.count_levels(self.ENTRIES), {"critical": 1, "warning": 1, "error": 1, "info": 1})
+
+    def test_merge_without_limit(self):
+        big = [{"ts": i, "level": "error"} for i in range(300)]
+        self.assertEqual(len(parsing.merge_incidents(big)), 200)
+        self.assertEqual(len(parsing.merge_incidents(big, limit=None)), 300)
+
+    def test_run_name_ts(self):
+        expected = datetime(2026, 10, 8, 7, 0, 3).timestamp()  # host-local
+        self.assertEqual(parsing.run_ts_from_name("2026-10-08_07-00-03.md"), expected)
+        self.assertEqual(parsing.run_ts_from_name("2026-10-08T07:00:03.md"), expected)
+        self.assertIsNone(parsing.run_ts_from_name("notes.md"))
+
+    def test_parse_cron_run(self):
+        ok = parsing.parse_cron_run("2026-10-08_07-00-03.md",
+                                    "# Cron Job: x\n\n## Prompt\nfix errors\n\n## Response\nall good")
+        self.assertEqual(ok["status"], "ok")
+        self.assertEqual(ok["preview"], "all good")
+        bad = parsing.parse_cron_run("2026-10-08_07-00-03.md", "# Cron Job: x (FAILED)\n\n## Error\nboom")
+        self.assertEqual(bad["status"], "error")
+        self.assertEqual(bad["preview"], "boom")
+        long = parsing.parse_cron_run("x.md", "## Response\n" + "y" * 50, mtime=42, preview_chars=10)
+        self.assertEqual(long["ts"], 42)
+        self.assertTrue(long["truncated"])
+        self.assertEqual(len(long["preview"]), 10)
+
+    def test_run_history(self):
+        runs = [{"ts": t, "status": s} for t, s in ((100, "ok"), (300, "error"), (200, "ok"), (400, "ok"))]
+        h = parsing.run_history(runs)
+        self.assertEqual([r["ts"] for r in h["runs"]], [400, 300, 200, 100])
+        self.assertEqual((h["ok"], h["failed"]), (3, 1))
+        self.assertEqual(h["success_rate"], 0.75)
+        self.assertEqual(h["median_interval"], 100)
+        self.assertEqual(parsing.run_history(runs, limit=2)["count"], 2)
+        self.assertIsNone(parsing.run_history([])["success_rate"])
+
+    def test_find_job(self):
+        summary = parsing.summarize_jobs([{"id": "j1", "name": "sync"}, {"name": "daily"}], "default")
+        self.assertEqual(parsing.find_job(summary, "j1")["name"], "sync")
+        self.assertEqual(parsing.find_job(summary, "daily")["name"], "daily")
+        self.assertIsNone(parsing.find_job(summary, "nope"))
+        self.assertIsNone(parsing.find_job(summary, None))
+
 if __name__ == "__main__":
     unittest.main()
