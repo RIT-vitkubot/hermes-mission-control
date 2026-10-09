@@ -38,6 +38,7 @@
     <div class="topbar-right">
       <span id="clock" class="mono"></span>
       <span id="conn" class="conn" title="spojení s backendem"></span>
+      <button id="search-btn" class="btn btn-sm btn-icon" type="button" title="Hledat na dashboardu (/)" aria-label="Hledat"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
       <button id="help-btn" class="btn btn-sm btn-ghost" type="button" title="Klávesové zkratky (?)" aria-label="Klávesové zkratky">?</button>
       <button id="restart-btn" class="btn btn-danger" type="button" title="Restart Hermes gateway">⟲ <span class="btn-label-full">Restart Hermes gateway</span><span class="btn-label-short">Restart</span></button>
     </div>
@@ -77,6 +78,7 @@
           <span class="lg lg-session">session (5h okno)</span>
           <span class="lg lg-week">týden</span>
           <span class="muted small" id="usage-meta"></span>
+          <span class="legend-end" id="usage-export"></span>
         </div>
         <div class="forecast-line small" id="usage-forecast" title="Lineární projekce z bodů od posledního resetu (session: 3 h, týden: 48 h zpět). Jen odhad."></div>
         <div class="chart-wrap"><canvas id="usage-chart"></canvas><div id="usage-tip" class="tip hidden"></div></div>
@@ -95,14 +97,15 @@
 
       <article class="panel glass span-3" id="panel-agents">
         <header class="panel-head"><h3>Agenti</h3>
-          <span class="muted small" title="Odhad podle child procesů gateway PID (rekurzivně), ne přesný počet sub-agentů. Na hostu neexistuje zdroj pravdy pro živé sub-agenty.">procesy = odhad ⓘ</span>
+          <span class="head-actions"><a class="link-more" href="#/compare" title="Profily vedle sebe (g p)">srovnat profily ›</a>
+          <span class="muted small" title="Odhad podle child procesů gateway PID (rekurzivně), ne přesný počet sub-agentů. Na hostu neexistuje zdroj pravdy pro živé sub-agenty.">procesy = odhad ⓘ</span></span>
         </header>
         <div class="agents" id="agents"><div class="empty loading">Načítám agenty…</div></div>
       </article>
 
       <article class="panel glass span-2" id="panel-incidents">
         <header class="panel-head"><h3>Co teď hoří <span class="muted small">(24h)</span></h3>
-          <span class="head-actions"><a class="link-more" href="#/incidents">plný log ›</a><span id="inc-count" class="pill pill-unknown">0</span></span></header>
+          <span class="head-actions"><span id="inc-export" class="hide-narrow"></span><a class="link-more" href="#/incidents">plný log ›</a><span id="inc-count" class="pill pill-unknown">0</span></span></header>
         <ul class="incidents" id="incidents"><li class="empty loading">Načítám…</li></ul>
       </article>
 
@@ -123,6 +126,7 @@
         </header>
         <div class="forecast" id="forecast"></div>
         <div class="legend" id="token-legend"></div>
+        <div class="panel-foot" id="token-export"></div>
         <div class="chart-wrap short"><canvas id="token-chart"></canvas><div id="token-tip" class="tip hidden"></div></div>
       </article>
     </section>

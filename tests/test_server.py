@@ -75,7 +75,8 @@ class DetailEndpointsTest(unittest.TestCase):
 
     def test_static_assets(self):
         for path, ctype in (("/favicon.svg", "image/svg+xml"), ("/icon-192.png", "image/png"),
-                            ("/icon-512.png", "image/png"), ("/manifest.webmanifest", "application/manifest+json")):
+                            ("/icon-512.png", "image/png"), ("/manifest.webmanifest", "application/manifest+json"),
+                            ("/sw.js", "application/javascript"), ("/offline.html", "text/html")):
             with urlopen(self.base + path) as r:
                 self.assertEqual(r.status, 200)
                 self.assertTrue(r.headers["Content-Type"].startswith(ctype), path)
@@ -84,6 +85,32 @@ class DetailEndpointsTest(unittest.TestCase):
         with urlopen(self.base + "/manifest.webmanifest") as r:
             manifest = json.loads(r.read())
         self.assertEqual(manifest["start_url"], "/")
+        self.assertIn("/#/compare", [x["url"] for x in manifest["shortcuts"]])
+        with urlopen(self.base + "/sw.js") as r:
+            sw = r.read().decode("utf-8")
+        # every precached path must actually be served, and the API never cached
+        for path in __import__("re").search(r"var STATIC = \[([^\]]*)\]", sw).group(1).replace("\n", "").split(","):
+            path = path.strip().strip('"')
+            with urlopen(self.base + path) as r:
+                self.assertEqual(r.status, 200, path)
+        self.assertIn('url.pathname.indexOf("/api/") === 0', sw)
+
+    def test_compare_and_export(self):
+        code, body = self.get("/api/compare")
+        self.assertEqual((code, len(body["rows"])), (200, 6))
+        with urlopen(self.base + "/api/export?kind=incidents&format=csv&hours=168") as r:
+            self.assertTrue(r.headers["Content-Type"].startswith("text/csv"))
+            self.assertIn('attachment; filename="hermes-incidents-', r.headers["Content-Disposition"])
+            text = r.read().decode("utf-8")
+        self.assertTrue(text.startswith("\ufefftime,ts,level,profile,source,message,details\r\n"))
+        code, body = self.get("/api/export?kind=usage&format=json&window=6h")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["columns"][:2], ["time", "ts"])
+        self.assertTrue(body["rows"])
+        self.assertEqual(self.get("/api/export?kind=secrets")[0], 400)
+        self.assertEqual(self.get("/api/export?kind=usage&format=xml")[0], 400)
+        self.assertEqual(self.get("/api/export?kind=incidents&profile=../x")[0], 400)
+        self.assertEqual(self.get("/api/export?kind=incidents&level=bogus")[0], 400)
 
     def test_validation(self):
         self.assertEqual(self.get("/api/agent-log")[0], 400)

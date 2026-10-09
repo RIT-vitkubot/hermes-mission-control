@@ -151,5 +151,48 @@ class CollectorTest(unittest.TestCase):
         self.assertFalse(any(i["level"] == "warning" for i in errs["incidents"]))
         self.assertIn("warning", errs["counts"])  # counts are before the level filter
 
+    def test_cron_recent_and_state_sparkline(self):
+        recent = self.c.cron_recent("skola")
+        runs = recent["skola-sync"]
+        self.assertEqual(len(runs), 12)
+        self.assertEqual([r["status"] for r in runs[-3:]], ["error"] * 3)  # oldest first
+        self.assertTrue(all(r["duration"] is not None and r["duration"] > 0 for r in runs))
+        self.assertEqual(len(recent["skola-old"]), 1)  # jobs.json fallback
+        st = self.c.state()
+        job = [j for j in st["cron"][4]["jobs"] if j["id"] == "skola-sync"][0]
+        self.assertEqual(len(job["recent"]), 12)
+        # the cached cron summary itself is not mutated
+        self.assertNotIn("recent", self.c.cron("skola")["jobs"][0])
+
+    def test_health_in_state(self):
+        by = {a["profile"]: a["health"] for a in self.c.state()["agents"]}
+        self.assertEqual(by["tegistic"]["score"], 100)
+        self.assertLess(by["skola"]["score"], by["editor"]["score"])  # 3x streak weighs more
+        self.assertEqual(by["obchodnik"]["level"], "error")  # disconnected + log errors
+
+    def test_compare(self):
+        rows = {r["profile"]: r for r in self.c.compare()["rows"]}
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(rows["skola"]["max_streak"], 3)
+        self.assertEqual(rows["skola"]["max_streak_job"], "inbox-sync")
+        self.assertEqual(rows["skola"]["jobs_failing"], 1)
+        self.assertGreater(rows["editor"]["tokens"], 0)
+        self.assertGreater(rows["editor"]["cost_usd"], 0)
+        self.assertIsNotNone(rows["default"]["longest_run_seconds"])
+        self.assertEqual(rows["default"]["longest_run_job"], "daily-report")
+        self.assertGreaterEqual(rows["obchodnik"]["errors_24h"], 1)
+
+    def test_export(self):
+        rows, cols = self.c.export("usage", window="24h")
+        self.assertGreater(len(rows), 100)
+        self.assertTrue(rows[0]["time"].endswith("Z"))
+        self.assertGreater(len(self.c.export("usage")[0]), len(rows))
+        rows, cols = self.c.export("incidents", profile="obchodnik", hours=168)
+        self.assertTrue(rows and all(r["profile"] == "obchodnik" for r in rows))
+        self.assertEqual(len(self.c.export("tokens", days=7)[0]), 7 * 6)
+        self.assertIn("health", self.c.export("compare")[1])
+        self.assertIsNone(self.c.export("nope"))
+
+
 if __name__ == "__main__":
     unittest.main()

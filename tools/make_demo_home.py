@@ -101,6 +101,9 @@ def build(root, now=None, broken=True, pid=None):
                         fh.write("## Error\n\nTimeoutError: upstream did not respond\n")
                     else:
                         fh.write("## Response\n\nDone. Processed %d items for %s.\n" % (r * 3 + 1, p))
+                # mtime = end of the run -> dashboard estimates run duration
+                end = t + 20 + (i * 37 + r * 13) % (240 if step > 3600 else 90)
+                os.utime(os.path.join(out_dir, name), (end, end))
         if broken and p in ("default", "obchodnik"):
             with open(os.path.join(home, "logs", "errors.log"), "w") as fh:
                 fh.write("%s ERROR gateway: telegram poll failed\nTraceback (most recent call last):\n"
