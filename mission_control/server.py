@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from . import parsing
+from . import collectors, parsing
 from .collectors import Collector, Config
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -216,8 +216,12 @@ def main(argv=None):
     ap.add_argument("--hermes-home", default=None, help="Hermes home dir (env HERMES_HOME, default ~/.hermes)")
     ap.add_argument("--no-cli", action="store_true",
                     help="never call `hermes logs/cron incidents`; read files only")
+    ap.add_argument("--tz", default=os.environ.get("MC_TZ") or collectors.DEFAULT_TZ,
+                    help="IANA zone for displayed times and day buckets (env MC_TZ, default %s)"
+                    % collectors.DEFAULT_TZ)
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args(argv)
+    collectors.set_display_tz(args.tz)
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")

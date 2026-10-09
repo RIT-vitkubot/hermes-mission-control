@@ -25,6 +25,7 @@ python3 server.py --port 8090 --bind 127.0.0.1,10.8.0.25
 | `--bind` / `MC_BIND`      | `127.0.0.1`     | čárkou oddělené bind adresy; adresa, kterou nejde nabindovat, se jen zaloguje |
 | `--hermes-home` / `HERMES_HOME` | `~/.hermes` | kořen Hermes dat |
 | `--no-cli`                | vypnuto         | nevolat `hermes logs errors` / `hermes cron incidents`, jen číst soubory |
+| `--tz` / `MC_TZ`          | `Europe/Prague` | IANA zóna pro zobrazované časy, graf historie a denní buckety; záměrně **nezávisí** na systémovém TZ hostu (produkce běží na `Etc/UTC`) |
 | `MC_HERMES_BIN`, `MC_GH_BIN` | z `PATH`     | cesta k `hermes` / `gh` |
 
 Stroj **není** veřejně přístupný (jen VPN/LAN), proto dashboard záměrně nemá

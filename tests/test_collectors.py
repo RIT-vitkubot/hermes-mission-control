@@ -4,7 +4,10 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
+from unittest import mock
 
+from mission_control import collectors
 from mission_control.collectors import Collector, Config, read_text, read_token_usage
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
@@ -196,3 +199,53 @@ class CollectorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostTzTest(unittest.TestCase):
+    """host_tz() must report Europe/Prague regardless of the system TZ."""
+
+    def setUp(self):
+        self._old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Etc/UTC"  # production host clock
+        time.tzset()
+
+    def tearDown(self):
+        collectors.set_display_tz(collectors.DEFAULT_TZ)
+        if self._old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._old_tz
+        time.tzset()
+
+    def test_default_is_prague_not_system(self):
+        collectors.set_display_tz(None)
+        winter = datetime(2026, 1, 15, 12, tzinfo=timezone.utc).timestamp()
+        summer = datetime(2026, 7, 15, 12, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(collectors.host_tz(winter)["offset_seconds"], 3600)
+        self.assertEqual(collectors.host_tz(winter)["name"], "CET")
+        self.assertEqual(collectors.host_tz(summer)["offset_seconds"], 7200)
+        self.assertEqual(collectors.host_tz(summer)["name"], "CEST")
+        self.assertEqual(collectors.host_tz()["zone"], "Europe/Prague")
+        self.assertIn(collectors.host_tz()["offset_seconds"], (3600, 7200))
+
+    def test_dst_transition(self):
+        # 2026-03-29 01:00 UTC: CET -> CEST; 2026-10-25 01:00 UTC: CEST -> CET
+        before = datetime(2026, 3, 29, 0, 59, tzinfo=timezone.utc).timestamp()
+        after = datetime(2026, 3, 29, 1, 1, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(collectors.host_tz(before)["offset_seconds"], 3600)
+        self.assertEqual(collectors.host_tz(after)["offset_seconds"], 7200)
+        before = datetime(2026, 10, 25, 0, 59, tzinfo=timezone.utc).timestamp()
+        after = datetime(2026, 10, 25, 1, 1, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(collectors.host_tz(before)["offset_seconds"], 7200)
+        self.assertEqual(collectors.host_tz(after)["offset_seconds"], 3600)
+
+    def test_override(self):
+        collectors.set_display_tz("America/New_York")
+        winter = datetime(2026, 1, 15, 12, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(collectors.host_tz(winter)["offset_seconds"], -5 * 3600)
+
+    def test_server_tz_arg(self):
+        from mission_control import server
+        with mock.patch.object(server, "ThreadingHTTPServer", side_effect=OSError("no bind")):
+            server.main(["--tz", "Asia/Tokyo", "--port", "1"])
+        self.assertEqual(collectors.host_tz()["offset_seconds"], 9 * 3600)
