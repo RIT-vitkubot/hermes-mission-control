@@ -25,6 +25,7 @@ try {
   document.getElementById("bmo-fallback").classList.remove("hidden");
   throw e;
 }
+window.__bmoReady = true;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 

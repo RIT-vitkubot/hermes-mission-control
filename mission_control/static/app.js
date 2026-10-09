@@ -45,9 +45,12 @@
     if (sec == null || isNaN(sec)) return "–";
     sec = Math.abs(sec);
     if (sec < 60) return Math.round(sec) + " s";
-    if (sec < 3600) return Math.round(sec / 60) + " min";
-    if (sec < 86400) return Math.floor(sec / 3600) + " h " + Math.round((sec % 3600) / 60) + " min";
-    return Math.floor(sec / 86400) + " d " + Math.round((sec % 86400) / 3600) + " h";
+    // round to the displayed unit first so we never print "1 h 60 min"
+    var min = Math.round(sec / 60);
+    if (min < 60) return min + " min";
+    if (min < 1440) { var h = Math.floor(min / 60), m = min % 60; return h + " h" + (m ? " " + m + " min" : ""); }
+    var hrs = Math.round(sec / 3600), d = Math.floor(hrs / 24), hh = hrs % 24;
+    return d + " d" + (hh ? " " + hh + " h" : "");
   }
   function rel(ts, now) {
     if (!ts) return "–";
@@ -189,14 +192,14 @@
       total += c.jobs.length;
       var rows = c.jobs.map(function (j) {
         if (j.status === "error") failing++;
-        return '<tr class="job-' + esc(j.status) + '"><td>' + esc(j.name) + "</td><td class=\"mono\">" + esc(j.schedule || "–") + "</td>" +
-          '<td><span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span></td>" +
-          '<td title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(j.last_status) : "") + "</td>" +
-          '<td title="' + esc(fmtDateTime(j.next_run_at)) + '">' + esc(j.enabled ? rel(j.next_run_at, now) : "–") + "</td>" +
-          "<td>" + (j.failure_streak > 0 ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</td></tr>";
+        return '<tr class="job-' + esc(j.status) + '"><td data-label="job">' + esc(j.name) + '</td><td data-label="rozvrh" class="mono">' + esc(j.schedule || "–") + "</td>" +
+          '<td data-label="stav"><span class="pill pill-' + esc(j.status) + '">' + esc(j.status) + "</span></td>" +
+          '<td data-label="poslední" title="' + esc(fmtDateTime(j.last_run_at)) + '">' + esc(rel(j.last_run_at, now)) + (j.last_status ? " · " + esc(j.last_status) : "") + "</td>" +
+          '<td data-label="další" title="' + esc(fmtDateTime(j.next_run_at)) + '">' + esc(j.enabled ? rel(j.next_run_at, now) : "–") + "</td>" +
+          '<td data-label="streak">' + (j.failure_streak > 0 ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</td></tr>";
       }).join("");
       return '<div class="cron-profile"><h4><span style="color:' + (PROFILE_COLORS[c.profile] || "inherit") + '">' + esc(c.profile) + "</span><span class=\"muted\">" + c.jobs.length + " jobů</span></h4>" +
-        (rows ? "<table><tr><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th>streak</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
+        (rows ? "<table class=\"cron-table\"><tr class=\"cron-th\"><th>job</th><th>rozvrh</th><th>stav</th><th>poslední</th><th>další</th><th>streak</th></tr>" + rows + "</table>" : '<div class="empty">žádné joby</div>') +
         "</div>";
     }).join("");
     $("cron-meta").textContent = total + " jobů celkem" + (failing ? " · " + failing + " v chybě" : "");
@@ -313,10 +316,12 @@
       }
     }
   }
-  $("usage-chart").addEventListener("mousemove", function (e) {
-    var r = e.target.getBoundingClientRect(); drawUsage(lastUsage, e.clientX - r.left);
+  ["pointermove", "pointerdown"].forEach(function (ev) { // pointerdown = tap on touch screens
+    $("usage-chart").addEventListener(ev, function (e) {
+      var r = e.target.getBoundingClientRect(); drawUsage(lastUsage, e.clientX - r.left);
+    });
   });
-  $("usage-chart").addEventListener("mouseleave", function () { $("usage-tip").classList.add("hidden"); drawUsage(lastUsage); });
+  $("usage-chart").addEventListener("pointerleave", function () { $("usage-tip").classList.add("hidden"); drawUsage(lastUsage); });
 
   function pollUsage() {
     var w = usageWindow;
@@ -392,7 +397,9 @@
         y -= h;
       });
       ctx.globalAlpha = 1;
-      if (days.length <= 16 || idx % 2 === 0) {
+      // ~44px per "dd.mm." label; skip labels instead of letting them overlap
+      var every = Math.max(1, Math.ceil(44 / bw));
+      if ((days.length - 1 - idx) % every === 0) {
         ctx.fillStyle = css("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
         ctx.fillText(days[idx].slice(8) + "." + days[idx].slice(5, 7) + ".", pad.l + idx * bw + bw / 2, pad.t + ph + 6);
       }
@@ -412,10 +419,12 @@
       }
     }
   }
-  $("token-chart").addEventListener("mousemove", function (e) {
-    var r = e.target.getBoundingClientRect(); drawTokens(lastTokens, e.clientX - r.left);
+  ["pointermove", "pointerdown"].forEach(function (ev) { // pointerdown = tap on touch screens
+    $("token-chart").addEventListener(ev, function (e) {
+      var r = e.target.getBoundingClientRect(); drawTokens(lastTokens, e.clientX - r.left);
+    });
   });
-  $("token-chart").addEventListener("mouseleave", function () { $("token-tip").classList.add("hidden"); drawTokens(lastTokens); });
+  $("token-chart").addEventListener("pointerleave", function () { $("token-tip").classList.add("hidden"); drawTokens(lastTokens); });
   Array.prototype.forEach.call(document.querySelectorAll("#token-mode button"), function (b) {
     b.addEventListener("click", function () {
       tokenMode = b.getAttribute("data-m");
@@ -449,6 +458,7 @@
   $("restart-btn").addEventListener("click", function () {
     if (!confirm("Opravdu restartovat celý Hermes gateway (všech 6 profilů)?")) return;
     var btn = $("restart-btn");
+    var label = btn.innerHTML;
     btn.disabled = true; btn.textContent = "⟲ Restartuji…";
     fetch("/api/restart", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
       .then(function (r) { return r.json(); })
@@ -459,10 +469,24 @@
           (out.trim() ? "\n\n" + out.trim().slice(-1500) : ""));
       })
       .catch(function (e) { alert("❌ Restart request selhal: " + e.message); })
-      .then(function () { btn.disabled = false; btn.textContent = "⟲ Restart Hermes gateway"; pollState(); });
+      .then(function () { btn.disabled = false; btn.innerHTML = label; pollState(); });
   });
 
   window.addEventListener("resize", function () { drawUsage(lastUsage); drawTokens(lastTokens); });
+
+  // Sticky header height -> CSS var used by scroll-padding / scroll-margin so
+  // jumping to a section never hides its first rows under the header.
+  function syncTopbar() {
+    var h = document.querySelector(".topbar").getBoundingClientRect().height;
+    document.documentElement.style.setProperty("--topbar-h", Math.round(h) + "px");
+  }
+  syncTopbar();
+  if (window.ResizeObserver) new ResizeObserver(syncTopbar).observe(document.querySelector(".topbar"));
+  else window.addEventListener("resize", syncTopbar);
+
+  // bmo.js is a module importing Three.js from a CDN; if that never loads
+  // (offline, blocked CDN) show the static fallback instead of an empty stage.
+  setTimeout(function () { if (!window.__bmoReady) $("bmo-fallback").classList.remove("hidden"); }, 5000);
 
   pollState(); pollUsage(); pollGithub(); pollTokens(); tickClock();
   setInterval(pollState, POLL_STATE_MS);
