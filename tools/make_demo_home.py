@@ -26,8 +26,9 @@ def profile_home(root, p):
     return root if p == "default" else os.path.join(root, "profiles", p)
 
 
-def build(root, now=None, broken=True):
+def build(root, now=None, broken=True, pid=None):
     now = now or time.time()
+    pid = pid or os.getpid()
     os.makedirs(os.path.join(root, "scripts"), exist_ok=True)
 
     # 1. usage history: every 10 minutes for 9 days
@@ -52,7 +53,7 @@ def build(root, now=None, broken=True):
         platforms["obchodnik"]["telegram"] = {"state": "error", "error": "401 Unauthorized"}
     with open(os.path.join(root, "gateway_state.json"), "w") as fh:
         json.dump({
-            "pid": os.getpid(), "gateway_state": "running", "active_agents": 2,
+            "pid": pid, "gateway_state": "running", "active_agents": 2,
             "served_profiles": list(PROFILES), "platforms": platforms,
             "active_work": {"programovani": {"summary": "review PR #12", "platform": "telegram"}},
             "code_version": "1.4.2", "code_sha": "a1b2c3d4e5f6", "start_time": 12345,
@@ -128,4 +129,6 @@ def build(root, now=None, broken=True):
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         sys.exit("usage: make_demo_home.py <target-dir>")
-    print(build(os.path.abspath(sys.argv[1])))
+    # this script exits right away, so point the fake gateway PID at the
+    # parent shell (normally still alive while the demo server runs)
+    print(build(os.path.abspath(sys.argv[1]), pid=os.getppid()))
