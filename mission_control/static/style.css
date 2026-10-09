@@ -464,3 +464,17 @@ table.compare td.extreme { background: rgba(255, 197, 61, .1); box-shadow: inset
   .sr-type { grid-row: auto; }
   .legend-end { margin-left: 0; }
 }
+
+/* round 4: colour-blind friendly palette (Okabe-Ito inspired) + shape cues */
+:root[data-palette="cb"] {
+  --ok: #4db8ff;
+  --warn: #f0e442;
+  --err: #ff8f1f;
+  --crit: #ff5ec4;
+}
+:root[data-palette="cb"] .cell.error { border-radius: 2px; transform: rotate(45deg) scale(.85); }
+:root[data-palette="cb"] .spark-bar.error { background: repeating-linear-gradient(45deg, var(--err) 0 2px, rgba(0, 0, 0, .45) 2px 4px); }
+:root[data-palette="cb"] .pill-ok { box-shadow: 0 0 10px rgba(77, 184, 255, .25); }
+:root[data-palette="cb"] .pill-error { box-shadow: 0 0 12px rgba(255, 143, 31, .4); }
+.help-h { margin: 16px 0 6px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+.palette-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }

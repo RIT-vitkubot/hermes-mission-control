@@ -12,6 +12,16 @@
     programovani: "#3dffa8", skola: "#9b6bff", tegistic: "#ff8a3d"
   };
 
+  // Optional colour-blind friendly palette (blue / yellow / orange instead of
+  // green / red, plus shape cues). Per-browser preference only.
+  var PALETTE_KEY = "hmc-palette";
+  function getPalette() { try { return localStorage.getItem(PALETTE_KEY) === "cb" ? "cb" : "default"; } catch (e) { return "default"; } }
+  function applyPalette(p) {
+    if (p === "cb") document.documentElement.setAttribute("data-palette", "cb");
+    else document.documentElement.removeAttribute("data-palette");
+  }
+  applyPalette(getPalette());
+
   var tzOffset = null; // host offset in seconds; null -> browser local
   var usageError = null, tokensError = null, lastForecast = null;
   var usageWindow = "24h";
@@ -285,6 +295,7 @@
   // Status-coloured BMO favicon + issue count in the tab title, so the state
   // is visible from another tab without opening the dashboard.
   var FAVICON_COLORS = { ok: "#4fe3c1", warn: "#ffc53d", error: "#ff4d6d", unknown: "#7d93b5" };
+  var FAVICON_COLORS_CB = { ok: "#4db8ff", warn: "#f0e442", error: "#ff8f1f", unknown: "#7d93b5" };
   var faviconLevel = null, titleIssues = 0, modalTitle = null;
   function bmoIconSVG(color) {
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="10" y="4" width="44" height="56" rx="9" fill="' + color + '"/>' +
@@ -296,9 +307,11 @@
   function updateFavicon(level, issues) {
     titleIssues = level === "ok" ? 0 : issues;
     applyTitle();
-    if (level === faviconLevel) return;
-    faviconLevel = level;
-    $("favicon").setAttribute("href", "data:image/svg+xml," + encodeURIComponent(bmoIconSVG(FAVICON_COLORS[level] || FAVICON_COLORS.unknown)));
+    var key = level + ":" + getPalette();
+    if (key === faviconLevel) return;
+    faviconLevel = key;
+    var colors = getPalette() === "cb" ? FAVICON_COLORS_CB : FAVICON_COLORS;
+    $("favicon").setAttribute("href", "data:image/svg+xml," + encodeURIComponent(bmoIconSVG(colors[level] || colors.unknown)));
   }
   function applyTitle() {
     document.title = (titleIssues ? "(" + titleIssues + ") " : "") + (modalTitle ? modalTitle + " · " : "") + "Hermes Mission Control";
@@ -1279,8 +1292,24 @@
     $("modal-body").innerHTML = '<table class="keys">' + SHORTCUTS.map(function (k) {
       return "<tr><td>" + k[0].split(" ").map(function (x) { return x === "–" ? "–" : "<kbd>" + esc(x) + "</kbd>"; }).join(" ") + "</td><td>" + esc(k[1]) + "</td></tr>";
     }).join("") + "</table>" +
+      '<h4 class="help-h">Zobrazení</h4><div class="palette-row"><span>barevná paleta stavů</span><div class="seg" id="d-palette" role="group" aria-label="paleta">' +
+      [["default", "neonová"], ["cb", "pro barvoslepé"]].map(function (o) {
+        return '<button type="button" data-p="' + o[0] + '"' + (getPalette() === o[0] ? ' class="active" aria-pressed="true"' : ' aria-pressed="false"') + ">" + o[1] + "</button>";
+      }).join("") + '</div></div><p class="muted small">Pro barvoslepé: OK = modrá, varování = žlutá, chyba = oranžová a chybové tečky jsou kosočtverce. Uloží se jen v tomhle prohlížeči.</p>' +
       '<p class="muted small">Zkratky nefungují, když píšeš do pole (kromě <kbd>Esc</kbd>). Detailní pohledy mají sdílitelné URL (<code>#/agent/…</code>, <code>#/cron/…</code>, <code>#/incidents…</code>, <code>#/compare</code>, <code>#/search?q=…</code>, <code>#/help</code>).</p>';
   }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("#d-palette button") : null;
+    if (!b) return;
+    var p = b.getAttribute("data-p");
+    try { localStorage.setItem(PALETTE_KEY, p); } catch (err) { /* private mode: this page only */ }
+    applyPalette(p);
+    Array.prototype.forEach.call(document.querySelectorAll("#d-palette button"), function (x) {
+      x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", String(x === b));
+    });
+    if (window.__mcLastState) updateFavicon(window.__mcLastState.summary.level, window.__mcLastState.summary.issues.length);
+    drawUsage(lastUsage); drawTokens(lastTokens);
+  });
   function navigate(hash) {
     if (location.hash === hash) { route(); return; }
     modal.pendingPush = true;
