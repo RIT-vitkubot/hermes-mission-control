@@ -486,3 +486,18 @@ table.compare td.extreme { background: rgba(255, 197, 61, .1); box-shadow: inset
 :root[data-palette="cb"] .pill-error { box-shadow: 0 0 12px rgba(255, 143, 31, .4); }
 .help-h { margin: 16px 0 6px; font-size: 12px; letter-spacing: var(--sub-ls); text-transform: uppercase; color: var(--cyan); }
 .palette-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+
+/* round 5: live sparklines in the hero KPI cards and the forecast "tempo" card */
+.kpi-quota { position: relative; }
+.kpi-spark { position: relative; height: 30px; margin-top: 6px; }
+.kpi-spark svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.kpi-spark polyline { fill: none; stroke: var(--c); stroke-width: 1.6; stroke-linejoin: round; filter: drop-shadow(0 0 3px var(--c)); }
+.kpi-spark .ks-max { stroke: rgba(255, 77, 109, .3); stroke-dasharray: 2 3; }
+.kpi-spark.draw-in polyline { stroke-dasharray: 100; animation: spark-draw 1.2s ease-out both; }
+@keyframes spark-draw { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+.ks-dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
+.ks-dot::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1px solid var(--c); animation: ping 2s ease-out infinite; }
+@keyframes ping { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+.day-spark { display: flex; align-items: flex-end; gap: 2px; height: 24px; margin-top: 6px; }
+.day-spark span { flex: 1; min-width: 2px; border-radius: 1px 1px 0 0; background: var(--cyan); opacity: .55; }
+.day-spark span:last-child { opacity: 1; box-shadow: 0 0 6px var(--cyan); }

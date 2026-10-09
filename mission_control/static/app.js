@@ -362,6 +362,16 @@
     $("kpi-session-eta").textContent = fc ? short(fc.session) : "";
     $("kpi-week-eta").textContent = fc ? short(fc.week) : "";
   }
+  function dailySparkHTML(fmt) {
+    if (!lastTokens || !lastTokens.day_keys) return "";
+    var days = lastTokens.day_keys, avail = lastTokens.profiles.filter(function (p) { return p.available; });
+    var vals = days.map(function (d) { return avail.reduce(function (s, p) { return s + dayValue(p.days[d]); }, 0); });
+    var max = Math.max.apply(null, vals.concat([0]));
+    if (max <= 0) return "";
+    return '<div class="day-spark" role="img" aria-label="Denní ' + (tokenMode === "cost" ? "náklady" : "tokeny") + " za " + days.length + ' dní">' + vals.map(function (v, i) {
+      return '<span style="height:' + Math.max(4, Math.round(100 * v / max)) + '%" title="' + esc(days[i] + " · " + fmt(v)) + '"></span>';
+    }).join("") + "</div>";
+  }
   var MONTHS_CS = ["leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
   function renderForecast() {
     var f = lastForecast, el = $("forecast");
@@ -379,7 +389,7 @@
     setHTML(el,
       '<div class="fc-cards">' +
       '<div class="fc"><div class="kpi-label">' + esc(month) + " dosud</div><div class=\"fc-val\">" + fmt(m.month_to_date) + '</div><div class="kpi-sub">' + m.day + ". z " + m.days_in_month + " dní</div></div>" +
-      '<div class="fc"><div class="kpi-label">tempo</div><div class="fc-val">' + fmt(m.rate_per_day) + '<span class="muted small">/den</span></div><div class="kpi-sub">průměr 7 dní</div></div>' +
+      '<div class="fc"><div class="kpi-label">tempo</div><div class="fc-val">' + fmt(m.rate_per_day) + '<span class="muted small">/den</span></div><div class="kpi-sub">průměr 7 dní</div>' + dailySparkHTML(fmt) + "</div>" +
       '<div class="fc fc-main"><div class="kpi-label">projekce do konce měsíce</div><div class="fc-val">≈ ' + fmt(m.projected) + "</div>" +
       '<div class="kpi-sub">' + (m.prev_month ? "minulý měsíc " + (m.prev_partial ? "≥ " : "") + fmt(m.prev_month) + (m.prev_partial ? " (neúplná data)" : "") + (delta != null ? ' · <span class="' + (delta > 0 ? "up" : "down") + '">' + (delta > 0 ? "+" : "") + delta + " %</span>" : "") : "bez dat za minulý měsíc") + "</div></div>" +
       "</div>" +
@@ -516,6 +526,7 @@
     return getJSON("/api/usage?window=" + encodeURIComponent(w)).then(function (d) {
       if (w !== usageWindow) return;
       lastUsage = d; usageError = null; if (d.tz) tzOffset = d.tz.offset_seconds;
+      if (w === "24h") { spark24 = d; renderQuotaSparks(); }
       var meta = d.available ? d.count + " vzorků" : "";
       if (d.latest) meta += " · poslední " + fmtDateTime(d.latest.ts) +
         (d.latest.session_reset ? " · reset session " + d.latest.session_reset : "");
@@ -525,6 +536,35 @@
     }).catch(function (e) { if (w === usageWindow) { usageError = e.message; drawUsage(lastUsage); } });
   }
   var pollUsage = guarded(fetchUsage);
+
+  // Hero KPI sparklines: always the last 24 h (own request only when the big
+  // chart shows another window), a pulsing dot marks the newest sample.
+  var spark24 = null, sparkDrawn = {};
+  var pollSpark = guarded(function () {
+    if (usageWindow === "24h") return null;
+    return getJSON("/api/usage?window=24h").then(function (d) { spark24 = d; renderQuotaSparks(); }, function () {});
+  });
+  function quotaSparkHTML(points, key, label) {
+    var t1 = Date.now() / 1000, t0 = t1 - 86400;
+    var r = L.sparkPaths(points, key, 100, 30, t0, t1);
+    if (!r.last) return "";
+    return '<svg viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">' +
+      '<line x1="0" y1="0.5" x2="100" y2="0.5" class="ks-max" vector-effect="non-scaling-stroke"/>' +
+      r.paths.map(function (p) { return '<polyline points="' + p + '" vector-effect="non-scaling-stroke" pathLength="100"/>'; }).join("") +
+      "</svg>" + '<span class="ks-dot" style="left:' + r.last.x.toFixed(1) + "%;top:" + (r.last.y / 30 * 100).toFixed(1) + '%" title="' +
+      esc(label + " " + Math.round(r.last.v) + " %") + '"></span>';
+  }
+  function renderQuotaSparks() {
+    var pts = (spark24 && spark24.points) || [];
+    [["kpi-session-spark", "session_pct", "session"], ["kpi-week-spark", "week_pct", "týden"]].forEach(function (k) {
+      var el = $(k[0]);
+      // the line draws itself in once; later polls only update it in place
+      if (setHTML(el, quotaSparkHTML(pts, k[1], k[2])) && !sparkDrawn[k[0]] && el.firstChild) {
+        sparkDrawn[k[0]] = true; el.classList.add("draw-in");
+        setTimeout(function () { el.classList.remove("draw-in"); }, 1400);
+      }
+    });
+  }
   Array.prototype.forEach.call(document.querySelectorAll("#usage-windows button"), function (b) {
     b.addEventListener("click", function () {
       usageWindow = b.getAttribute("data-w");
@@ -1446,7 +1486,7 @@
       getJSON("/api/forecast").then(function (f) { lastForecast = f; }, function () { lastForecast = { error: true }; })
     ]).then(function () { drawTokens(lastTokens); renderForecast(); });
   });
-  function pollAll() { pollState(); pollUsage(); pollGithub(); pollTokens(); }
+  function pollAll() { pollState(); pollUsage(); pollSpark(); pollGithub(); pollTokens(); }
   document.addEventListener("visibilitychange", function () { if (!document.hidden) pollAll(); });
   $("usage-export").innerHTML = exportLinks("kind=usage&window=" + usageWindow);
   $("token-export").innerHTML = exportLinks("kind=tokens&days=14");
@@ -1461,6 +1501,7 @@
   }
   every(POLL_STATE_MS, pollState);
   every(POLL_USAGE_MS, pollUsage);
+  every(POLL_USAGE_MS, pollSpark);
   every(POLL_SLOW_MS, pollGithub);
   every(POLL_SLOW_MS, pollTokens);
   setInterval(function () { tickClock(); tickUpdated(); }, 1000);
