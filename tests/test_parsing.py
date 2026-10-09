@@ -92,6 +92,8 @@ class GatewayTest(unittest.TestCase):
         dead = parsing.summarize_gateway(state, pid_alive=False)
         self.assertFalse(dead["running"])
         self.assertEqual(dead["status"], "error")
+        self.assertTrue(all(p.get("stale") for p in dead["platforms"]))
+        self.assertFalse(any(p.get("stale") for p in s["platforms"]))
         missing = parsing.summarize_gateway(None)
         self.assertFalse(missing["available"])
 

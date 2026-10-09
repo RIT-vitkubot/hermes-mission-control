@@ -301,6 +301,10 @@ def summarize_gateway(state, profiles=PROFILES, now=None, pid_alive=None, uptime
     if not isinstance(served, list) or not served:
         served = list(profiles)
     platforms = normalize_platforms(state.get("platforms"), profiles=tuple(served) + tuple(profiles))
+    if not running:
+        # the file is no longer rewritten -> these are last known states only
+        for p in platforms:
+            p["stale"] = True
     errors = [p for p in platforms if p["status"] == "error"]
     if not running:
         status = "error"

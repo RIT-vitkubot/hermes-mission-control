@@ -77,6 +77,12 @@
   }
   function agentHref(p) { return "#/agent/" + encodeURIComponent(p); }
   function jobHref(p, j) { return "#/cron/" + encodeURIComponent(p) + "/" + encodeURIComponent(j.id || j.name); }
+  // While the gateway is down its state file is stale: grey dot, keep the
+  // last known state only in the tooltip.
+  function platformCell(p) { return p.stale ? "unknown" : p.status; }
+  function platformTitle(p) {
+    return (p.stale ? "gateway neběží — poslední známý stav: " : "") + p.state + (p.error ? " — " + p.error : "");
+  }
   function setConn(ok) { $("conn").className = "conn " + (ok ? "ok" : "err"); }
 
   // Polling re-renders panels every few seconds. Replacing innerHTML blindly
@@ -164,8 +170,7 @@
       platformNames.forEach(function (n) {
         var p = plats.filter(function (x) { return x.profile === prof && x.platform === n; })[0];
         if (!p) { html += '<td><span class="muted">·</span></td>'; return; }
-        var title = p.state + (p.error ? " — " + p.error : "");
-        html += '<td title="' + esc(title) + '"><span class="cell ' + esc(p.status) + '"></span></td>';
+        html += '<td title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span></td>';
       });
       html += "</tr>";
     });
@@ -185,7 +190,7 @@
       var lastRun = c.last_run_at ? rel(c.last_run_at, now) + (c.last_job ? " · " + c.last_job.name + " (" + c.last_job.status + ")" : "") : "–";
       var nextRun = c.next_run_at ? rel(c.next_run_at, now) + (c.next_job ? " · " + c.next_job.name : "") : "–";
       var platforms = a.platforms.map(function (p) {
-        return '<span title="' + esc(p.state + (p.error ? " — " + p.error : "")) + '"><span class="cell ' + esc(p.status) + '"></span> ' + esc(p.platform) + "</span>";
+        return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + "</span>";
       }).join(" &nbsp;");
       return '<div class="agent ' + cls + (a.busy ? " busy" : "") + '">' +
         '<div class="agent-head"><a class="agent-name" href="' + agentHref(a.profile) + '" style="color:' + (PROFILE_COLORS[a.profile] || "inherit") + '">' + esc(a.label) + "</a>" + conn + "</div>" +
@@ -834,7 +839,7 @@
         "<dt>spojení</dt><dd>" + conn + "</dd>" +
         "<dt>teď</dt><dd>" + (a.busy ? "⚡ " : "💤 ") + esc(a.activity) + "</dd>" +
         "<dt>platformy</dt><dd>" + (a.platforms.length ? a.platforms.map(function (p) {
-          return '<span class="cell ' + esc(p.status) + '"></span> ' + esc(p.platform) + ' <span class="muted">' + esc(p.state) + (p.error ? " — " + esc(p.error) : "") + "</span>";
+          return '<span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + ' <span class="muted">' + esc(platformTitle(p)) + "</span>";
         }).join("<br>") : '<span class="muted">žádné</span>') + "</dd>" +
         '<dt title="Odhad podle child procesů gateway PID">procesy ⓘ</dt><dd>' + (a.processes == null ? "N/A" : "~" + a.processes) + "</dd>" +
         "</dl>" +
