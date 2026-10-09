@@ -63,6 +63,28 @@ class DetailEndpointsTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertTrue(body["incidents"])
 
+    def test_forecast_and_state_restarts(self):
+        code, body = self.get("/api/forecast")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["available"])
+        self.assertIn("projected", body["cost"])
+        code, body = self.get("/api/state")
+        self.assertEqual(code, 200)
+        self.assertIn("restarts", body)
+        self.assertIn(body["summary"]["cause"], ("ok", "gateway", "platform", "cron", "logs", "quota"))
+
+    def test_static_assets(self):
+        for path, ctype in (("/favicon.svg", "image/svg+xml"), ("/icon-192.png", "image/png"),
+                            ("/icon-512.png", "image/png"), ("/manifest.webmanifest", "application/manifest+json")):
+            with urlopen(self.base + path) as r:
+                self.assertEqual(r.status, 200)
+                self.assertTrue(r.headers["Content-Type"].startswith(ctype), path)
+                data = r.read()
+                self.assertTrue(data)
+        with urlopen(self.base + "/manifest.webmanifest") as r:
+            manifest = json.loads(r.read())
+        self.assertEqual(manifest["start_url"], "/")
+
     def test_validation(self):
         self.assertEqual(self.get("/api/agent-log")[0], 400)
         self.assertEqual(self.get("/api/agent-log?profile=nope")[0], 400)
