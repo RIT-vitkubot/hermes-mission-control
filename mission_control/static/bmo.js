@@ -1,8 +1,12 @@
 // 3D BMO mascot built from Three.js primitives (no external model).
-// Reacts to the `mc-state` event dispatched by app.js:
-//   happy   -> teal glow, calm float, blinking, smile
-//   worried -> amber glow, glancing eyes, flat mouth
-//   alarmed -> red pulsing glow, shaking, open mouth, flailing arms
+// Reacts to the `mc-state` event dispatched by app.js (summary.mood, which
+// the backend derives from the dominant problem cause):
+//   happy   -> teal glow, calm float, blinking, smile, waving
+//   busy    -> happy + "typing" arms, eyes follow the working agent's orb
+//   worried -> amber glow, glancing eyes, flat mouth (platform / log errors)
+//   alarmed -> red pulsing glow, shaking, open mouth, flailing arms, "!" (cron failures)
+//   tired   -> orange glow, half-closed eyes, sweat drop, yawns (quota near limit)
+//   down    -> dim red, X eyes, slumped & flickering screen, orbs sink (gateway down)
 import * as THREE from "three";
 
 const canvas = document.getElementById("bmo-canvas");
@@ -16,6 +20,9 @@ const MOODS = {
   happy: { glow: new THREE.Color(0x3ef2ff), screen: new THREE.Color(0xc8ffe9), speed: 1.0 },
   worried: { glow: new THREE.Color(0xffc53d), screen: new THREE.Color(0xfff2b8), speed: 1.6 },
   alarmed: { glow: new THREE.Color(0xff2d55), screen: new THREE.Color(0xffc2cc), speed: 3.0 },
+  busy: { glow: new THREE.Color(0x3ef2ff), screen: new THREE.Color(0xc8f6ff), speed: 1.3 },
+  tired: { glow: new THREE.Color(0xff9f3d), screen: new THREE.Color(0xffe2b8), speed: 0.6 },
+  down: { glow: new THREE.Color(0x8a1d33), screen: new THREE.Color(0x56666b), speed: 0.5 },
 };
 
 let renderer;
@@ -119,6 +126,21 @@ const open = new THREE.Mesh(new THREE.CircleGeometry(0.13, 24), new THREE.MeshBa
 open.scale.set(1.2, 0.85, 1);
 open.position.set(0, -0.2, 0.001);
 face.add(smile, flat, open);
+// X eyes (gateway down)
+function xEye(x) {
+  const g = new THREE.Group();
+  const bar = new THREE.PlaneGeometry(0.22, 0.04);
+  const a = new THREE.Mesh(bar, faceMat);
+  const b = new THREE.Mesh(bar, faceMat);
+  a.rotation.z = Math.PI / 4;
+  b.rotation.z = -Math.PI / 4;
+  g.add(a, b);
+  g.position.set(x, 0.14, 0.002);
+  return g;
+}
+const xEyeL = xEye(-0.36);
+const xEyeR = xEye(0.36);
+face.add(xEyeL, xEyeR);
 
 // front controls: D-pad, buttons, slot
 const dpadMat = mat(0xffd23f, { emissive: 0x332600 });
@@ -139,6 +161,21 @@ btnBlue.position.set(0.25, -0.5, 0.72);
 const slot = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 0.04), mat(0x1f5d52));
 slot.position.set(-0.2, -0.22, 0.71);
 bmo.add(btnRed, btnGreen, btnBlue, slot);
+
+// sweat drop (quota) and exclamation mark (alarm)
+const sweat = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12),
+  new THREE.MeshBasicMaterial({ color: 0x8fd8ff, transparent: true, opacity: 0.9 }));
+sweat.scale.set(1, 1.5, 1);
+bmo.add(sweat);
+const bang = new THREE.Group();
+const bangMat = new THREE.MeshBasicMaterial({ color: 0xff2d55 });
+const bangBar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.42, 0.1), bangMat);
+bangBar.position.y = 0.16;
+const bangDot = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), bangMat);
+bangDot.position.y = -0.18;
+bang.add(bangBar, bangDot, glowSprite(0xff2d55, 1.1, 0.6));
+bang.position.set(0.9, 2.05, 0.2);
+bmo.add(bang);
 
 // limbs
 const limbMat = mat(0x4fc4ad);
@@ -222,11 +259,15 @@ let mood = "happy";
 const cur = { glow: MOODS.happy.glow.clone(), screen: MOODS.happy.screen.clone(), speed: 1 };
 let agentState = {};
 
+// ?bmo=<mood> pins a mood for previewing the animations (display only)
+const forcedMood = new URLSearchParams(location.search).get("bmo");
+
 function applyState(st) {
-  const m = (st && st.summary && st.summary.mood) || "happy";
+  const m = forcedMood || (st && st.summary && st.summary.mood) || "happy";
   mood = MOODS[m] ? m : "happy";
   agentState = {};
   ((st && st.agents) || []).forEach((a) => { agentState[a.profile] = a; });
+  if (!forcedMood && mood === "happy" && Object.values(agentState).some((a) => a.busy)) mood = "busy";
 }
 window.addEventListener("mc-state", (e) => applyState(e.detail));
 if (window.__mcLastState) applyState(window.__mcLastState);
@@ -253,8 +294,10 @@ resize();
 
 // ---- animation loop
 const clock = new THREE.Clock();
+const GREY = new THREE.Color(0x55606e);
 let t = 0;
 let nextBlink = 2;
+let flicker = 0;
 let visible = true;
 new IntersectionObserver((entries) => { visible = entries[0].isIntersecting; }).observe(stage);
 
@@ -268,51 +311,94 @@ function animate() {
   cur.speed += (target.speed - cur.speed) * 0.05;
   t += dt * cur.speed;
 
-  // float / shake
   const alarmed = mood === "alarmed";
-  bmo.position.y = Math.sin(t * 1.6) * 0.15 + 0.1;
+  const down = mood === "down";
+  const tired = mood === "tired";
+  const busy = mood === "busy";
+
+  // float / shake / slump
+  bmo.position.y = down ? -0.35 + Math.sin(t * 1.2) * 0.04 : Math.sin(t * 1.6) * (tired ? 0.07 : 0.15) + 0.1;
   bmo.position.x = alarmed ? Math.sin(t * 40) * 0.05 : 0;
-  bmo.rotation.y += ((pointer.x * 0.5 + Math.sin(t * 0.5) * 0.15) - bmo.rotation.y) * 0.05;
-  bmo.rotation.x += ((pointer.y * 0.15) - bmo.rotation.x) * 0.05;
-  bmo.rotation.z = alarmed ? Math.sin(t * 25) * 0.03 : Math.sin(t * 0.8) * 0.02;
+  const lookX = down ? 0 : pointer.x * 0.5 + Math.sin(t * 0.5) * 0.15;
+  bmo.rotation.y += (lookX - bmo.rotation.y) * 0.05;
+  bmo.rotation.x += ((down ? 0.22 : tired ? 0.08 : pointer.y * 0.15) - bmo.rotation.x) * 0.05;
+  const tilt = alarmed ? Math.sin(t * 25) * 0.03 : down ? 0.2 : Math.sin(t * 0.8) * 0.02;
+  bmo.rotation.z += (tilt - bmo.rotation.z) * (alarmed ? 1 : 0.06);
 
   // limbs
+  let aL, aR;
   if (alarmed) {
-    armL.rotation.z = -1.9 + Math.sin(t * 9) * 0.6;
-    armR.rotation.z = 1.9 - Math.sin(t * 9 + 1) * 0.6;
+    aL = -1.9 + Math.sin(t * 9) * 0.6;
+    aR = 1.9 - Math.sin(t * 9 + 1) * 0.6;
+  } else if (down) {
+    aL = -0.05; aR = 0.08;
+  } else if (tired) {
+    aL = -0.12 + Math.sin(t * 1.4) * 0.03;
+    aR = 0.12 - Math.sin(t * 1.4) * 0.03;
   } else if (mood === "worried") {
-    armL.rotation.z = -0.25 + Math.sin(t * 2) * 0.08;
-    armR.rotation.z = 0.25 - Math.sin(t * 2) * 0.08;
+    aL = -0.25 + Math.sin(t * 2) * 0.08;
+    aR = 0.25 - Math.sin(t * 2) * 0.08;
+  } else if (busy) { // typing
+    aL = -0.9 + Math.sin(t * 14) * 0.12;
+    aR = 0.9 + Math.sin(t * 14 + Math.PI) * 0.12;
   } else {
-    armL.rotation.z = -0.45 + Math.sin(t * 1.6) * 0.12;
-    armR.rotation.z = 0.7 + Math.sin(t * 3.2) * 0.45; // friendly wave
+    aL = -0.45 + Math.sin(t * 1.6) * 0.12;
+    aR = 0.7 + Math.sin(t * 3.2) * 0.45; // friendly wave
   }
-  legL.rotation.x = Math.sin(t * 1.6) * 0.12;
-  legR.rotation.x = -Math.sin(t * 1.6) * 0.12;
+  armL.rotation.z += (aL - armL.rotation.z) * 0.3;
+  armR.rotation.z += (aR - armR.rotation.z) * 0.3;
+  armL.rotation.x = armR.rotation.x = busy ? -0.6 : 0;
+  legL.rotation.x = down ? 0 : Math.sin(t * 1.6) * 0.12;
+  legR.rotation.x = down ? 0 : -Math.sin(t * 1.6) * 0.12;
 
   // face
-  smile.visible = mood === "happy";
-  flat.visible = mood === "worried";
-  open.visible = alarmed;
-  browL.visible = browR.visible = mood !== "happy";
-  browL.rotation.z = alarmed ? -0.45 : -0.2;
-  browR.rotation.z = alarmed ? 0.45 : 0.2;
+  const yawn = tired && (t % 9) > 7.6; // tired BMO yawns every few seconds
+  smile.visible = mood === "happy" || busy;
+  flat.visible = mood === "worried" || down || (tired && !yawn);
+  open.visible = alarmed || yawn;
+  eyeL.visible = eyeR.visible = !down;
+  xEyeL.visible = xEyeR.visible = down;
+  browL.visible = browR.visible = mood === "worried" || alarmed || tired;
+  browL.rotation.z = alarmed ? -0.45 : tired ? 0.25 : -0.2;
+  browR.rotation.z = alarmed ? 0.45 : tired ? -0.25 : 0.2;
   if (alarmed) open.scale.y = 0.85 + Math.sin(t * 6) * 0.25;
-  const glance = mood === "worried" ? Math.sin(t * 1.2) * 0.07 : pointer.x * 0.05;
+  else if (yawn) open.scale.y = 0.6 + Math.sin(((t % 9) - 7.6) / 1.4 * Math.PI) * 0.6;
+  let glance = pointer.x * 0.05;
+  if (mood === "worried") glance = Math.sin(t * 1.2) * 0.07;
+  if (busy) { // look towards the first working agent's orb
+    const p = Object.keys(agentState).find((k) => agentState[k].busy && orbs[k]);
+    if (p) glance = Math.max(-0.08, Math.min(0.08, orbs[p].position.x * 0.03));
+  }
   eyeL.position.x = -0.36 + glance;
   eyeR.position.x = 0.36 + glance;
   nextBlink -= dt;
   const blinking = nextBlink < 0.12 && nextBlink > 0;
-  eyeL.scale.y = eyeR.scale.y = blinking ? 0.12 : (alarmed ? 1.4 : 1);
-  if (nextBlink <= 0) nextBlink = 2 + Math.random() * 3;
+  eyeL.scale.y = eyeR.scale.y = blinking || yawn ? 0.12 : (alarmed ? 1.4 : tired ? 0.38 : 1);
+  if (nextBlink <= 0) nextBlink = (tired ? 1.2 : 2) + Math.random() * 3;
+
+  // sweat drop slides down the side of the screen; "!" bobs over the head
+  sweat.visible = tired;
+  if (tired) {
+    const k = (t * 0.5) % 1;
+    sweat.position.set(0.98, 1.05 - k * 0.6, 0.75);
+    sweat.material.opacity = 0.9 * (1 - k);
+  }
+  bang.visible = alarmed;
+  if (alarmed) { bang.position.y = 2.05 + Math.abs(Math.sin(t * 3)) * 0.12; bang.rotation.z = Math.sin(t * 6) * 0.12; }
 
   screenMat.color.copy(cur.screen);
   screenMat.emissive.copy(cur.screen).multiplyScalar(0.6);
-  screenMat.emissiveIntensity = alarmed ? 0.4 + Math.abs(Math.sin(t * 4)) * 0.5 : 0.35;
+  if (down) { // dying screen: mostly dim, random short flickers
+    flicker -= dt;
+    if (flicker < -0.4 - Math.random() * 2) flicker = 0.08;
+    screenMat.emissiveIntensity = flicker > 0 ? 0.6 : 0.05;
+  } else {
+    screenMat.emissiveIntensity = alarmed ? 0.4 + Math.abs(Math.sin(t * 4)) * 0.5 : 0.35;
+  }
 
   // glow + lights
   halo.material.color.copy(cur.glow);
-  halo.material.opacity = alarmed ? 0.45 + Math.abs(Math.sin(t * 3)) * 0.4 : 0.45 + Math.sin(t) * 0.08;
+  halo.material.opacity = alarmed ? 0.45 + Math.abs(Math.sin(t * 3)) * 0.4 : down ? 0.18 + Math.sin(t) * 0.05 : 0.45 + Math.sin(t) * 0.08;
   moodLight.color.copy(cur.glow);
   ringMat.color.copy(cur.glow);
   ring2.material.color.copy(cur.glow);
@@ -326,12 +412,16 @@ function animate() {
     const g = orbs[p];
     const a = agentState[p];
     const ud = g.userData;
-    ud.angle += dt * (0.35 + (a && a.busy ? 0.6 : 0));
+    ud.angle += dt * (down ? 0.05 : 0.35 + (a && a.busy ? 0.6 : 0));
     const r = 3.1;
-    g.position.set(Math.cos(ud.angle) * r, 0.3 + Math.sin(ud.angle * 2 + i) * 0.35, Math.sin(ud.angle) * r * 0.55);
+    // with the gateway down the orbs sink to the floor and go grey
+    ud.sink = (ud.sink || 0) + ((down ? 1 : 0) - (ud.sink || 0)) * 0.03;
+    const y = 0.3 + Math.sin(ud.angle * 2 + i) * 0.35;
+    g.position.set(Math.cos(ud.angle) * r, y + (floorY + 0.15 - y) * ud.sink, Math.sin(ud.angle) * r * 0.55);
     let color = ud.color;
     let op = 0.8;
-    if (a && a.connected === false) { color = MOODS.alarmed.glow; op = 0.5 + Math.abs(Math.sin(t * 5)) * 0.5; }
+    if (down) { color = GREY; op = 0.3; }
+    else if (a && a.connected === false) { color = MOODS.alarmed.glow; op = 0.5 + Math.abs(Math.sin(t * 5)) * 0.5; }
     else if (!a || a.connected == null) { op = 0.25; }
     g.userData.core.material.color.copy(color);
     g.userData.glow.material.color.copy(color);

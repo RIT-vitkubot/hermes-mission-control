@@ -50,6 +50,38 @@ class CollectorTest(unittest.TestCase):
         self.assertFalse(any("outside 24h" in i["message"] for i in st["incidents"]))
         self.assertIsNotNone(st["processes"]["estimate"])
 
+    def test_usage_forecast(self):
+        f = self.c.usage("24h")["forecast"]
+        self.assertIn("eta", f["session"])
+        self.assertIsNotNone(f["week"]["rate_per_hour"])
+
+    def test_forecast(self):
+        f = self.c.forecast()
+        self.assertTrue(f["available"])
+        self.assertEqual(len(f["profiles"]), 6)
+        self.assertGreater(f["cost"]["month_to_date"], 0)
+        self.assertGreaterEqual(f["cost"]["projected"], f["cost"]["month_to_date"])
+        self.assertGreater(f["tokens"]["rate_per_day"], 0)
+        missing = Collector(Config(hermes_home=os.path.join(self.tmp, "nope"), use_cli=False, gh_bin="/x"))
+        self.assertFalse(missing.forecast()["available"])
+
+    def test_restart_timeline(self):
+        c = Collector(Config(hermes_home=self.tmp, use_cli=False, gh_bin="/x", hermes_bin="/bin/true"))
+        c.state()  # baseline snapshot, no event
+        self.assertEqual(c.restart_events(), [])
+        res = c.restart_gateway(client="10.8.0.2")
+        self.assertTrue(res["ok"])
+        # simulate the gateway coming back with a new PID
+        c._observe_gateway({"pid": 999999, "running": True, "started_at": time.time()}, time.time())
+        events = c.restart_events()
+        self.assertEqual([e["kind"] for e in events], ["restart", "api_restart"])
+        self.assertEqual(events[1]["client"], "10.8.0.2")
+        # the next real poll sees the original PID again -> one more restart event
+        self.assertEqual([e["kind"] for e in c.state()["restarts"]], ["restart", "restart", "api_restart"])
+        fail = Collector(Config(hermes_home=self.tmp, use_cli=False, gh_bin="/x", hermes_bin="/bin/false"))
+        self.assertFalse(fail.restart_gateway()["ok"])
+        self.assertFalse(fail.restart_events()[0]["ok"])
+
     def test_missing_home(self):
         c = Collector(Config(hermes_home=os.path.join(self.tmp, "nope"), use_cli=False, gh_bin="/x"))
         st = c.state()

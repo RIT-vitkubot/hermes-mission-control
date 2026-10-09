@@ -215,6 +215,129 @@ class OverallTest(unittest.TestCase):
         self.assertEqual(len(s["issues"]), 2)
         self.assertIn("1 chyba", s["issues"][0]["text"])
 
+    def test_cause_drives_mood(self):
+        down = parsing.overall_status(self.gw(running=False), [{"counts": {"error": 1}}], [], now=100)
+        self.assertEqual((down["cause"], down["mood"]), ("gateway", "down"))
+        self.assertEqual([i["cause"] for i in down["issues"]], ["gateway", "cron"])
+        quota = parsing.overall_status(self.gw(), [], [], {"session_pct": 10, "week_pct": 93}, now=100)
+        self.assertEqual((quota["level"], quota["cause"], quota["mood"]), ("warn", "quota", "tired"))
+        cron = parsing.overall_status(self.gw(), [{"counts": {"error": 3}}], [], now=100)
+        self.assertEqual((cron["cause"], cron["mood"]), ("cron", "alarmed"))
+        plat = parsing.overall_status(self.gw(errors=1), [], [], now=100)
+        self.assertEqual((plat["cause"], plat["mood"]), ("platform", "worried"))
+        ok = parsing.overall_status(self.gw(), [], [], now=100)
+        self.assertEqual(ok["cause"], "ok")
+
+    def test_error_outranks_quota_cause(self):
+        # quota warning is listed first chronologically but cron error wins
+        s = parsing.overall_status(self.gw(), [{"counts": {"error": 4}}], [], {"week_pct": 99}, now=100)
+        self.assertEqual((s["cause"], s["mood"]), ("cron", "alarmed"))
+
+
+class ForecastTest(unittest.TestCase):
+    def pts(self, key, values, step=600, t0=0):
+        return [{"ts": t0 + i * step, key: v} for i, v in enumerate(values)]
+
+    def test_quota_eta_linear(self):
+        # +6 % per 10 min = 36 %/h, latest 60 -> 100 in 40/36 h
+        p = self.pts("session_pct", [30, 36, 42, 48, 54, 60])
+        f = parsing.quota_eta(p, "session_pct", now=3000)
+        self.assertAlmostEqual(f["rate_per_hour"], 36.0)
+        self.assertAlmostEqual(f["eta"], 3000 + 40 / 36.0 * 3600, delta=1)
+        self.assertEqual(f["basis_points"], 6)
+
+    def test_quota_eta_uses_only_points_after_reset(self):
+        p = self.pts("session_pct", [80, 90, 95, 2, 4, 6, 8])
+        f = parsing.quota_eta(p, "session_pct", now=3600)
+        self.assertEqual(f["basis_points"], 4)
+        self.assertAlmostEqual(f["rate_per_hour"], 12.0)
+
+    def test_quota_eta_flat_or_sparse(self):
+        flat = parsing.quota_eta(self.pts("week_pct", [40, 40, 40, 40]), "week_pct", now=1800)
+        self.assertEqual(flat["rate_per_hour"], 0)
+        self.assertIsNone(flat["eta"])
+        sparse = parsing.quota_eta(self.pts("week_pct", [10, 20]), "week_pct", now=600)
+        self.assertIsNone(sparse["eta"])
+        self.assertIsNone(parsing.quota_eta([], "week_pct", now=0)["latest"])
+        # points with None for the key are ignored, future points too
+        mixed = [{"ts": 0, "week_pct": None}, {"ts": 10 ** 9, "week_pct": 50}]
+        self.assertIsNone(parsing.quota_eta(mixed, "week_pct", now=100)["latest"])
+
+    def test_quota_eta_reset_comes_first(self):
+        # reset at t=1800, +1 % per 10 min from 2 % -> 100 % would take ~16 h,
+        # far after the 5 h window resets
+        p = self.pts("session_pct", [90, 95, 99, 2, 3, 4, 5, 6])
+        f = parsing.quota_eta(p, "session_pct", now=4200, period=5 * 3600)
+        self.assertIsNone(f["eta"])
+        self.assertTrue(f["resets_first"])
+        # fast enough to hit 100 % within the window -> ETA kept
+        q = self.pts("session_pct", [90, 95, 99, 2, 22, 42, 62])
+        g = parsing.quota_eta(q, "session_pct", now=3600, period=5 * 3600)
+        self.assertIsNotNone(g["eta"])
+        self.assertFalse(g["resets_first"])
+        # without a seen reset we cannot know when the window ends -> keep ETA
+        r = parsing.quota_eta(self.pts("session_pct", [2, 3, 4, 5]), "session_pct", now=1800, period=5 * 3600)
+        self.assertIsNotNone(r["eta"])
+
+    def test_quota_eta_already_full(self):
+        f = parsing.quota_eta(self.pts("session_pct", [70, 85, 100, 100]), "session_pct", now=1800)
+        self.assertEqual(f["eta"], 1800)
+
+    def test_day_cost_and_tokens(self):
+        self.assertEqual(parsing.day_cost({"actual_cost_usd": 0, "estimated_cost_usd": 1.5}), 1.5)
+        self.assertEqual(parsing.day_cost({"actual_cost_usd": 2.0, "estimated_cost_usd": 1.5}), 2.0)
+        self.assertEqual(parsing.day_cost(None), 0)
+        self.assertEqual(parsing.day_tokens({"input_tokens": 10, "output_tokens": 5, "estimated_cost_usd": 9}), 15)
+        self.assertEqual(parsing.day_tokens({"total_tokens": 7, "input_tokens": 10}), 7)
+
+    def test_month_forecast(self):
+        from datetime import date
+        today = date(2026, 10, 9)
+        vals = {"2026-10-%02d" % d: 2.0 for d in range(1, 9)}  # 8 full days at $2
+        vals["2026-10-09"] = 0.5   # today, partial
+        vals["2026-09-30"] = 10.0  # previous month
+        f = parsing.month_forecast(vals, today)
+        self.assertEqual((f["days_in_month"], f["remaining_days"], f["day"]), (31, 22, 9))
+        self.assertAlmostEqual(f["month_to_date"], 16.5)
+        self.assertAlmostEqual(f["rate_per_day"], 2.0)
+        # 16 (1.-8.) + max(0.5, 2) for today + 22 * 2
+        self.assertAlmostEqual(f["projected"], 62.0)
+        self.assertEqual(f["prev_month"], 10.0)
+        self.assertTrue(f["prev_partial"])  # data starts 30.9., not 1.9.
+        vals["2026-09-01"] = 1.0
+        self.assertFalse(parsing.month_forecast(vals, today)["prev_partial"])
+
+    def test_month_forecast_first_day_and_no_history(self):
+        from datetime import date
+        f = parsing.month_forecast({"2026-11-01": 3.0}, date(2026, 11, 1))
+        self.assertEqual(f["rate_per_day"], 0)
+        self.assertAlmostEqual(f["projected"], 3.0)
+        self.assertIsNone(f["prev_month"])
+        # missing days inside the rate window count as zero
+        g = parsing.month_forecast({"2026-02-27": 7.0}, date(2026, 2, 28))
+        self.assertAlmostEqual(g["rate_per_day"], 1.0)
+        self.assertEqual(g["days_in_month"], 28)
+
+
+class GatewayTransitionTest(unittest.TestCase):
+    def snap(self, pid=1, running=True, started_at=1000.0):
+        return {"pid": pid, "running": running, "started_at": started_at}
+
+    def test_no_event(self):
+        self.assertIsNone(parsing.gateway_transition(None, self.snap()))
+        self.assertIsNone(parsing.gateway_transition(self.snap(), self.snap(started_at=1003)))
+        self.assertIsNone(parsing.gateway_transition(self.snap(running=False), self.snap(running=False)))
+
+    def test_restart_by_pid_or_start(self):
+        self.assertEqual(parsing.gateway_transition(self.snap(), self.snap(pid=2))["kind"], "restart")
+        ev = parsing.gateway_transition(self.snap(), self.snap(started_at=2000))
+        self.assertEqual((ev["kind"], ev["started_at"]), ("restart", 2000))
+
+    def test_down_up(self):
+        self.assertEqual(parsing.gateway_transition(self.snap(), self.snap(running=False))["kind"], "down")
+        up = parsing.gateway_transition(self.snap(running=False), self.snap(pid=5))
+        self.assertEqual((up["kind"], up["pid_to"]), ("up", 5))
+
 
 class GithubAndProcTest(unittest.TestCase):
     def test_repo_view(self):

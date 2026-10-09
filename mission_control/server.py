@@ -7,6 +7,7 @@ Endpoints::
     GET  /api/state         gateway + agents + cron + incidents + BMO summary
     GET  /api/usage?window= Claude quota history (6h|24h|7d|30d|all)
     GET  /api/tokens?days=  per-profile token/cost aggregates from state.db
+    GET  /api/forecast      month-to-date spend/tokens + projection to month end
     GET  /api/github        repo + open PR status (cached 5 min)
     GET  /api/agent-log?profile=&lines=     longer agent.log tail (detail view)
     GET  /api/cron/runs?profile=&job=&limit= run history of one cron job
@@ -37,6 +38,11 @@ STATIC_FILES = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/bmo.js": ("bmo.js", "application/javascript; charset=utf-8"),
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/favicon.ico": ("favicon.svg", "image/svg+xml"),  # browsers probe it blindly
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
 }
 
 log = logging.getLogger("mission_control")
@@ -111,6 +117,8 @@ def make_handler(collector):
                     except ValueError:
                         days = 14
                     return self._json(collector.tokens(days))
+                if path == "/api/forecast":
+                    return self._json(collector.forecast())
                 if path == "/api/github":
                     return self._json(collector.github())
                 if path == "/api/agent-log":
@@ -159,7 +167,7 @@ def make_handler(collector):
             if ctype != "application/json":
                 return self._json({"ok": False, "error": "Content-Type must be application/json"}, 415)
             log.warning("gateway restart requested from %s", self.client_address[0])
-            result = collector.restart_gateway()
+            result = collector.restart_gateway(client=self.client_address[0])
             log.warning("gateway restart result: ok=%s rc=%s", result.get("ok"), result.get("returncode"))
             return self._json(result, 200 if result.get("ok") else 500)
 

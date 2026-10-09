@@ -678,23 +678,31 @@ def _plural_cs(n, one, few, many):
     return many
 
 
+# Mood per dominant cause; anything not listed follows the level
+# (ok -> happy, warn -> worried, error -> alarmed). The frontend may still
+# switch "happy" to "busy" when some agent is working.
+CAUSE_MOODS = {"gateway": "down", "quota": "tired"}
+
+
 def overall_status(gateway, cron_summaries, incidents, usage_latest=None, now=None, recent_seconds=3600):
     """Compute the global system mood used by BMO + the speech bubble text.
 
-    Returns ``{level: ok|warn|error, mood, message, issues: [..]}``.
+    Returns ``{level: ok|warn|error, mood, cause, message, issues: [..]}``.
+    ``cause`` names the most severe problem (gateway / platform / cron /
+    logs / quota, or ``ok``) so BMO can react differently to each.
     """
-    issues = []  # (level, text)
+    issues = []  # (level, cause, text)
     if not gateway or not gateway.get("available"):
-        issues.append(("error", "Nevidím gateway_state.json!"))
+        issues.append(("error", "gateway", "Nevidím gateway_state.json!"))
     elif not gateway.get("running"):
-        issues.append(("error", "Gateway je dole!"))
+        issues.append(("error", "gateway", "Gateway je dole!"))
     elif gateway.get("platform_errors"):
         n = gateway["platform_errors"]
-        issues.append(("warn", "%d %s v chybě" % (n, _plural_cs(n, "platforma", "platformy", "platforem"))))
+        issues.append(("warn", "platform", "%d %s v chybě" % (n, _plural_cs(n, "platforma", "platformy", "platforem"))))
 
     failing = sum(c.get("counts", {}).get("error", 0) for c in cron_summaries)
     if failing:
-        issues.append(("error" if failing >= 3 else "warn",
+        issues.append(("error" if failing >= 3 else "warn", "cron",
                        "%d cron %s %s" % (failing, _plural_cs(failing, "job", "joby", "jobů"),
                                           _plural_cs(failing, "padl", "padly", "padlo"))))
 
@@ -706,40 +714,179 @@ def overall_status(gateway, cron_summaries, incidents, usage_latest=None, now=No
     crit = [i for i in recent if i["level"] == "critical"]
     errs = [i for i in recent if i["level"] == "error"]
     if crit:
-        issues.append(("error", "%d kritick%s %s za poslední hodinu" % (
-            len(crit), _plural_cs(len(crit), "á chyba", "é chyby", "ých chyb"), "")))
+        issues.append(("error", "logs", "%d kritick%s za poslední hodinu" % (
+            len(crit), _plural_cs(len(crit), "á chyba", "é chyby", "ých chyb"))))
     elif errs:
-        issues.append(("warn", "%d %s v logu za poslední hodinu" % (
+        issues.append(("warn", "logs", "%d %s v logu za poslední hodinu" % (
             len(errs), _plural_cs(len(errs), "chyba", "chyby", "chyb"))))
 
     if usage_latest:
         s = usage_latest.get("session_pct")
         w = usage_latest.get("week_pct")
         if w is not None and w >= 90:
-            issues.append(("warn", "Týdenní kvóta na %d %%" % round(w)))
+            issues.append(("warn", "quota", "Týdenní kvóta na %d %%" % round(w)))
         elif s is not None and s >= 90:
-            issues.append(("warn", "Session kvóta na %d %%" % round(s)))
+            issues.append(("warn", "quota", "Session kvóta na %d %%" % round(s)))
 
-    if any(lvl == "error" for lvl, _ in issues):
+    if any(lvl == "error" for lvl, _, _ in issues):
         level = "error"
     elif issues:
         level = "warn"
     else:
         level = "ok"
-    issues.sort(key=lambda it: 0 if it[0] == "error" else 1)
+    issues.sort(key=lambda it: 0 if it[0] == "error" else 1)  # stable: keeps priority order
     if level == "ok":
         message = "Všechno běží, šéfe! ✨"
+        cause = "ok"
     else:
-        message = issues[0][1]
+        message = issues[0][2]
+        cause = issues[0][1]
         if len(issues) > 1:
             message += " (+%d další)" % (len(issues) - 1)
-    mood = {"ok": "happy", "warn": "worried", "error": "alarmed"}[level]
+    mood = CAUSE_MOODS.get(cause) or {"ok": "happy", "warn": "worried", "error": "alarmed"}[level]
     return {
         "level": level,
         "mood": mood,
+        "cause": cause,
         "message": re.sub(r"\s+", " ", message).strip(),
-        "issues": [{"level": lvl, "text": re.sub(r"\s+", " ", t).strip()} for lvl, t in issues],
+        "issues": [{"level": lvl, "cause": c, "text": re.sub(r"\s+", " ", t).strip()} for lvl, c, t in issues],
     }
+
+
+# ---------------------------------------------------------------------------
+# Forecasts (pure arithmetic over already collected data, no LLM)
+# ---------------------------------------------------------------------------
+
+def quota_eta(points, key, now, lookback=6 * 3600, reset_drop=5.0, min_points=3, min_span=900, period=None):
+    """Linear projection of when ``key`` (session_pct / week_pct) hits 100 %.
+
+    Only points after the most recent reset (a drop of more than
+    ``reset_drop`` points) and within ``lookback`` seconds are used. Returns
+    ``{latest, rate_per_hour, eta, basis_points, resets_first}``; ``eta`` is
+    None when the trend is flat / falling or there is too little data. With
+    ``period`` (window length in seconds, e.g. 5 h for the session quota) an
+    ETA later than the expected next reset is dropped and ``resets_first``
+    is set instead -- the window resets before the limit is reached.
+    """
+    series = [(p["ts"], p[key]) for p in points if p.get(key) is not None and p["ts"] <= now]
+    out = {"latest": series[-1][1] if series else None, "rate_per_hour": None, "eta": None,
+           "basis_points": 0, "resets_first": False}
+    if not series:
+        return out
+    start = 0
+    for i in range(len(series) - 1, 0, -1):
+        if series[i - 1][1] - series[i][1] > reset_drop:
+            start = i
+            break
+    seg = [pt for pt in series[start:] if pt[0] >= now - lookback]
+    out["basis_points"] = len(seg)
+    if len(seg) < min_points or seg[-1][0] - seg[0][0] < min_span:
+        return out
+    n = float(len(seg))
+    mx = sum(t for t, _ in seg) / n
+    my = sum(v for _, v in seg) / n
+    var = sum((t - mx) ** 2 for t, _ in seg)
+    if var <= 0:
+        return out
+    slope = sum((t - mx) * (v - my) for t, v in seg) / var  # pct per second
+    out["rate_per_hour"] = round(slope * 3600, 2)
+    latest = seg[-1][1]
+    if slope > 0 and latest < 100:
+        out["eta"] = seg[-1][0] + (100 - latest) / slope
+    elif latest >= 100:
+        out["eta"] = seg[-1][0]
+    # the reset is only known when the segment really starts at a reset
+    if out["eta"] is not None and period and start > 0 and out["eta"] > series[start][0] + period:
+        out["eta"] = None
+        out["resets_first"] = True
+    return out
+
+
+def day_cost(bucket):
+    """Cost of one ``read_token_usage`` day bucket: actual if known, else estimate."""
+    if not bucket:
+        return 0.0
+    actual = bucket.get("actual_cost_usd") or 0
+    return float(actual if actual > 0 else (bucket.get("estimated_cost_usd") or 0))
+
+
+def day_tokens(bucket):
+    """Token total of one day bucket (``total_tokens`` if present, else the sum)."""
+    if not bucket:
+        return 0.0
+    if bucket.get("total_tokens") is not None:
+        return float(bucket["total_tokens"])
+    return float(sum(v for k, v in bucket.items() if "token" in k.lower()))
+
+
+def month_forecast(values, today, rate_days=7):
+    """Project a monthly total from ``{YYYY-MM-DD: value}`` daily values.
+
+    The daily rate is the average of the last ``rate_days`` *complete* days
+    (today excluded, missing days count as zero). Today is assumed to end at
+    least at that rate. Returns month-to-date, rate, projection and the
+    previous month's total (when the data reaches that far back;
+    ``prev_partial`` says the data starts only after the previous month began,
+    so the total is a lower bound and not comparable).
+    """
+    import calendar
+    from datetime import timedelta
+    month_start = today.replace(day=1)
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    prev_end = month_start - timedelta(days=1)
+    prev_start = prev_end.replace(day=1)
+    t_iso, m_iso = today.isoformat(), month_start.isoformat()
+    mtd = sum(v for d, v in values.items() if m_iso <= d <= t_iso)
+    prev = sum(v for d, v in values.items() if prev_start.isoformat() <= d <= prev_end.isoformat())
+    window = [(today - timedelta(days=i)).isoformat() for i in range(1, rate_days + 1)]
+    rate = sum(values.get(d, 0) for d in window) / float(rate_days)
+    today_val = values.get(t_iso, 0)
+    remaining = days_in_month - today.day
+    projected = mtd - today_val + max(today_val, rate) + rate * remaining
+    has_prev = any(d < m_iso for d in values)
+    first = min(values) if values else None
+    prev_partial = bool(has_prev and first > (prev_start + timedelta(days=1)).isoformat())
+    return {
+        "month": today.strftime("%Y-%m"),
+        "day": today.day,
+        "days_in_month": days_in_month,
+        "remaining_days": remaining,
+        "month_to_date": mtd,
+        "today": today_val,
+        "rate_per_day": rate,
+        "projected": projected,
+        "prev_month": prev if has_prev else None,
+        "prev_partial": prev_partial,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Gateway restart timeline (observed in memory, nothing is written to disk)
+# ---------------------------------------------------------------------------
+
+def gateway_transition(prev, cur, tolerance=5.0):
+    """Compare two gateway snapshots ``{pid, running, started_at}``.
+
+    Returns an event dict (``kind`` = ``restart`` / ``down`` / ``up``) or
+    None. ``started_at`` jitter below ``tolerance`` seconds is ignored
+    (it is derived from /proc uptime and rounding).
+    """
+    if not prev or not cur:
+        return None
+    if prev.get("running") and not cur.get("running"):
+        return {"kind": "down", "pid_from": prev.get("pid"), "pid_to": cur.get("pid")}
+    if not prev.get("running") and cur.get("running"):
+        return {"kind": "up", "pid_from": prev.get("pid"), "pid_to": cur.get("pid"),
+                "started_at": cur.get("started_at")}
+    if not cur.get("running"):
+        return None
+    pid_changed = prev.get("pid") != cur.get("pid")
+    a, b = prev.get("started_at"), cur.get("started_at")
+    start_changed = a is not None and b is not None and abs(a - b) > tolerance
+    if pid_changed or start_changed:
+        return {"kind": "restart", "pid_from": prev.get("pid"), "pid_to": cur.get("pid"),
+                "started_at": b}
+    return None
 
 
 # ---------------------------------------------------------------------------
