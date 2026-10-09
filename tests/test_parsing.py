@@ -263,6 +263,22 @@ class ForecastTest(unittest.TestCase):
         mixed = [{"ts": 0, "week_pct": None}, {"ts": 10 ** 9, "week_pct": 50}]
         self.assertIsNone(parsing.quota_eta(mixed, "week_pct", now=100)["latest"])
 
+    def test_quota_eta_reset_comes_first(self):
+        # reset at t=1800, +1 % per 10 min from 2 % -> 100 % would take ~16 h,
+        # far after the 5 h window resets
+        p = self.pts("session_pct", [90, 95, 99, 2, 3, 4, 5, 6])
+        f = parsing.quota_eta(p, "session_pct", now=4200, period=5 * 3600)
+        self.assertIsNone(f["eta"])
+        self.assertTrue(f["resets_first"])
+        # fast enough to hit 100 % within the window -> ETA kept
+        q = self.pts("session_pct", [90, 95, 99, 2, 22, 42, 62])
+        g = parsing.quota_eta(q, "session_pct", now=3600, period=5 * 3600)
+        self.assertIsNotNone(g["eta"])
+        self.assertFalse(g["resets_first"])
+        # without a seen reset we cannot know when the window ends -> keep ETA
+        r = parsing.quota_eta(self.pts("session_pct", [2, 3, 4, 5]), "session_pct", now=1800, period=5 * 3600)
+        self.assertIsNotNone(r["eta"])
+
     def test_quota_eta_already_full(self):
         f = parsing.quota_eta(self.pts("session_pct", [70, 85, 100, 100]), "session_pct", now=1800)
         self.assertEqual(f["eta"], 1800)
@@ -287,6 +303,9 @@ class ForecastTest(unittest.TestCase):
         # 16 (1.-8.) + max(0.5, 2) for today + 22 * 2
         self.assertAlmostEqual(f["projected"], 62.0)
         self.assertEqual(f["prev_month"], 10.0)
+        self.assertTrue(f["prev_partial"])  # data starts 30.9., not 1.9.
+        vals["2026-09-01"] = 1.0
+        self.assertFalse(parsing.month_forecast(vals, today)["prev_partial"])
 
     def test_month_forecast_first_day_and_no_history(self):
         from datetime import date

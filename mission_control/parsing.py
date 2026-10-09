@@ -757,16 +757,20 @@ def overall_status(gateway, cron_summaries, incidents, usage_latest=None, now=No
 # Forecasts (pure arithmetic over already collected data, no LLM)
 # ---------------------------------------------------------------------------
 
-def quota_eta(points, key, now, lookback=6 * 3600, reset_drop=5.0, min_points=3, min_span=900):
+def quota_eta(points, key, now, lookback=6 * 3600, reset_drop=5.0, min_points=3, min_span=900, period=None):
     """Linear projection of when ``key`` (session_pct / week_pct) hits 100 %.
 
     Only points after the most recent reset (a drop of more than
     ``reset_drop`` points) and within ``lookback`` seconds are used. Returns
-    ``{latest, rate_per_hour, eta, basis_points}``; ``eta`` is None when the
-    trend is flat / falling or there is too little data.
+    ``{latest, rate_per_hour, eta, basis_points, resets_first}``; ``eta`` is
+    None when the trend is flat / falling or there is too little data. With
+    ``period`` (window length in seconds, e.g. 5 h for the session quota) an
+    ETA later than the expected next reset is dropped and ``resets_first``
+    is set instead -- the window resets before the limit is reached.
     """
     series = [(p["ts"], p[key]) for p in points if p.get(key) is not None and p["ts"] <= now]
-    out = {"latest": series[-1][1] if series else None, "rate_per_hour": None, "eta": None, "basis_points": 0}
+    out = {"latest": series[-1][1] if series else None, "rate_per_hour": None, "eta": None,
+           "basis_points": 0, "resets_first": False}
     if not series:
         return out
     start = 0
@@ -791,6 +795,10 @@ def quota_eta(points, key, now, lookback=6 * 3600, reset_drop=5.0, min_points=3,
         out["eta"] = seg[-1][0] + (100 - latest) / slope
     elif latest >= 100:
         out["eta"] = seg[-1][0]
+    # the reset is only known when the segment really starts at a reset
+    if out["eta"] is not None and period and start > 0 and out["eta"] > series[start][0] + period:
+        out["eta"] = None
+        out["resets_first"] = True
     return out
 
 
@@ -817,7 +825,9 @@ def month_forecast(values, today, rate_days=7):
     The daily rate is the average of the last ``rate_days`` *complete* days
     (today excluded, missing days count as zero). Today is assumed to end at
     least at that rate. Returns month-to-date, rate, projection and the
-    previous month's total (when the data reaches that far back).
+    previous month's total (when the data reaches that far back;
+    ``prev_partial`` says the data starts only after the previous month began,
+    so the total is a lower bound and not comparable).
     """
     import calendar
     from datetime import timedelta
@@ -834,6 +844,8 @@ def month_forecast(values, today, rate_days=7):
     remaining = days_in_month - today.day
     projected = mtd - today_val + max(today_val, rate) + rate * remaining
     has_prev = any(d < m_iso for d in values)
+    first = min(values) if values else None
+    prev_partial = bool(has_prev and first > (prev_start + timedelta(days=1)).isoformat())
     return {
         "month": today.strftime("%Y-%m"),
         "day": today.day,
@@ -844,6 +856,7 @@ def month_forecast(values, today, rate_days=7):
         "rate_per_day": rate,
         "projected": projected,
         "prev_month": prev if has_prev else None,
+        "prev_partial": prev_partial,
     }
 
 

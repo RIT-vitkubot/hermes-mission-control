@@ -166,8 +166,9 @@ class Collector(object):
         out = parsing.usage_series(points, window, now)
         out["available"] = True
         out["forecast"] = {
-            "session": parsing.quota_eta(points, "session_pct", now, lookback=3 * 3600),
-            "week": parsing.quota_eta(points, "week_pct", now, lookback=48 * 3600, min_span=3 * 3600),
+            "session": parsing.quota_eta(points, "session_pct", now, lookback=3 * 3600, period=5 * 3600),
+            "week": parsing.quota_eta(points, "week_pct", now, lookback=48 * 3600, min_span=3 * 3600,
+                                      period=7 * 86400),
         }
         out["tz"] = host_tz()
         return out
