@@ -1418,6 +1418,11 @@
   drawUsage(null); drawTokens(null);
   pollAll(); tickClock(); tickUpdated();
   route();
+  // PWA: offline fallback + static cache (see sw.js). Browsers only allow
+  // service workers in a secure context, i.e. on 127.0.0.1 / localhost.
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js").catch(function () { /* optional */ });
+  }
   every(POLL_STATE_MS, pollState);
   every(POLL_USAGE_MS, pollUsage);
   every(POLL_SLOW_MS, pollGithub);

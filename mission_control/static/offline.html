@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Offline · Hermes Mission Control</title>
+  <meta name="theme-color" content="#04060d">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    :root { --bg: #04060d; --text: #d8f3ff; --muted: #7d93b5; --cyan: #3ef2ff; --err: #ff4d6d; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      min-height: 100vh; display: grid; place-items: center; padding: 16px;
+      background: radial-gradient(ellipse at top, #0b1430 0%, var(--bg) 70%); color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .card {
+      width: 100%; max-width: 440px; text-align: center; padding: 28px 22px;
+      border-radius: 18px; background: rgba(12, 20, 40, .7); border: 1px solid rgba(110, 200, 255, .18);
+      box-shadow: 0 0 40px rgba(62, 242, 255, .08);
+    }
+    svg { width: 96px; height: 96px; animation: sway 3s ease-in-out infinite; }
+    h1 { margin: 14px 0 6px; font-size: 18px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+    p { margin: 6px 0; color: var(--muted); }
+    .status { margin-top: 14px; font: 13px ui-monospace, monospace; color: var(--err); }
+    button {
+      margin-top: 16px; font: inherit; font-size: 14px; color: var(--cyan); background: rgba(62, 242, 255, .1);
+      border: 1px solid rgba(62, 242, 255, .5); border-radius: 10px; padding: 8px 18px; cursor: pointer;
+    }
+    @keyframes sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+    @media (prefers-reduced-motion: reduce) { svg { animation: none; } }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <rect x="10" y="4" width="44" height="56" rx="9" fill="#7d93b5"/>
+      <rect x="16" y="10" width="32" height="24" rx="4" fill="#d9fff2"/>
+      <path d="M22 17l6 6M28 17l-6 6M36 17l6 6M42 17l-6 6" stroke="#0b2a24" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M27 29h10" stroke="#0b2a24" stroke-width="2.4" stroke-linecap="round"/>
+      <rect x="17" y="43" width="12" height="4" rx="1" fill="#ffd23f"/><rect x="21" y="39" width="4" height="12" rx="1" fill="#ffd23f"/>
+      <circle cx="44" cy="44" r="4" fill="#ff3b5c"/><circle cx="38" cy="51" r="2.5" fill="#3dffa8"/>
+    </svg>
+    <h1>Mission Control offline</h1>
+    <p>BMO nedosáhne na backend dashboardu. Buď neběží proces <code>server.py</code>, nebo nejsi na VPN / v LAN.</p>
+    <p>Tohle neznamená, že spadl Hermes gateway — jen že ho teď nevidím.</p>
+    <div class="status" id="status" aria-live="polite">zkouším znovu…</div>
+    <button type="button" id="retry">Zkusit hned</button>
+  </main>
+  <script>
+    (function () {
+      var left = 0, el = document.getElementById("status");
+      function check() {
+        el.textContent = "zkouším spojení…";
+        fetch("/healthz", { cache: "no-store" }).then(function (r) {
+          if (r.ok) { el.textContent = "backend je zpět, načítám…"; location.reload(); return; }
+          throw new Error("HTTP " + r.status);
+        }).catch(function () { left = 10; });
+      }
+      document.getElementById("retry").addEventListener("click", check);
+      setInterval(function () {
+        if (left > 0) { left--; el.textContent = "backend nedostupný · další pokus za " + left + " s"; if (!left) check(); }
+      }, 1000);
+      check();
+    })();
+  </script>
+</body>
+</html>
