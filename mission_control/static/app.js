@@ -470,6 +470,72 @@
     }).join(""));
   }
 
+  // ---------------------------------------------------------------- timeline
+  // All profiles on one time axis (Gantt-like): coloured segments = worst
+  // state per 15-min bucket, ✕ = failed run (link to the job), hatched band
+  // = gateway down. Data from /api/timeline, polled like the slow panels.
+  var tlHours = "24", lastTimeline = null;
+  var TL_STATE = { ok: "běh ok", warning: "varování", error: "chyba", critical: "kritické" };
+  function tlTime(ts, long) { return long ? fmtDateTime(ts) : fmtTime(ts); }
+  function tlTicks(d) {
+    var step = { 6: 3600, 24: 3 * 3600, 72: 12 * 3600 }[d.hours] || 3 * 3600;
+    var off = tzOffset != null ? tzOffset : -new Date().getTimezoneOffset() * 60;
+    var out = [], span = d.end - d.start;
+    for (var t = Math.ceil((d.start + off) / step) * step - off; t < d.end - span * 0.07; t += step) {
+      out.push('<span class="tl-tick" style="left:' + ((t - d.start) / span * 100).toFixed(2) + '%">' + esc(d.hours > 24 ? fmtDateTime(t).replace(/ /, "\u00a0") : fmtTime(t)) + "</span>");
+    }
+    return out.join("") + '<span class="tl-tick tl-now">teď</span>';
+  }
+  function renderTimeline(d) {
+    lastTimeline = d;
+    if (d.error) { setHTML($("timeline"), '<div class="empty error-inline">⚠ Časovou osu nelze načíst (' + esc(d.error) + ").</div>"); return; }
+    var span = d.end - d.start, long = d.hours > 24, pct = function (t) { return ((t - d.start) / span * 100).toFixed(2); };
+    var down = (d.gateway_down || []).map(function (g) {
+      return '<span class="tl-down" style="left:' + pct(g.start) + "%;width:" + Math.max(0.3, (g.end - g.start) / span * 100).toFixed(2) + '%" title="' +
+        esc("gateway neběžel " + tlTime(g.start, long) + "–" + (g.open ? "teď" : tlTime(g.end, long))) + '"></span>';
+    }).join("");
+    var rows = d.profiles.map(function (p) {
+      var n = p.buckets.length, segs = L.mergeBuckets(p.buckets).filter(function (s) { return s.state !== "none"; });
+      var inc = p.incidents, sum = p.runs + " běhů · " + p.failed.length + " neúspěšných · " + (inc.critical + inc.error) + " chyb · " + inc.warning + " varování";
+      var track = segs.map(function (s) {
+        var t0 = d.start + s.start * d.bucket_seconds, t1 = d.start + s.end * d.bucket_seconds;
+        return '<span class="tl-seg s-' + esc(s.state) + '" style="left:' + (s.start / n * 100).toFixed(2) + "%;width:" + ((s.end - s.start) / n * 100).toFixed(2) + '%" title="' +
+          esc(tlTime(t0, long) + "–" + tlTime(t1, long) + " · " + (TL_STATE[s.state] || s.state)) + '"></span>';
+      }).join("") + L.clusterByPosition(p.failed.map(function (r) {
+        return { pos: +pct(Math.max(r.ts, d.start)), run: r };
+      }), 1.5).map(function (c) {
+        var runs = c.items.map(function (x) { return x.run; }), r = runs[0];
+        var sameJob = runs.every(function (x) { return x.job === r.job; });
+        var tip = runs.length === 1 ? r.job + " selhal " + fmtDateTime(r.ts) + (r.duration != null ? " · ~" + fmtDur(r.duration) : "")
+          : runs.length + " selhání: " + runs.map(function (x) { return x.job + " " + tlTime(x.ts, long); }).join(", ");
+        // one job -> its run history, several jobs -> the profile detail
+        var href = sameJob ? jobHref(p.profile, { id: r.job_id, name: r.job }) : agentHref(p.profile);
+        return '<a class="tl-mark" href="' + href + '" style="left:' + c.pos.toFixed(2) + '%" title="' + esc(tip) + '" aria-label="' + esc(tip) + '">✕' +
+          (runs.length > 1 ? "<sub>" + runs.length + "</sub>" : "") + "</a>";
+      }).join("");
+      return '<div class="tl-row"><a class="tl-label" href="' + agentHref(p.profile) + '" style="color:' + (PROFILE_COLORS[p.profile] || "inherit") + '" title="' + esc(sum) + '">' + esc(p.profile === "default" ? "BMO" : p.profile) + "</a>" +
+        '<div class="tl-track" role="img" aria-label="' + esc(profileLabel(p.profile) + ", posledních " + d.hours + " h: " + sum) + '">' + down + track + "</div>" +
+        '<span class="tl-stat muted small">' + p.runs + " běhů" + (p.failed.length ? ' · <span class="streak">' + p.failed.length + "✕</span>" : "") + "</span></div>";
+    }).join("");
+    setHTML($("timeline"), rows + '<div class="tl-row tl-axis" aria-hidden="true"><span></span><div class="tl-ticks">' + tlTicks(d) + "</div><span></span></div>");
+    $("tl-span").textContent = "(" + (d.hours > 24 ? d.hours / 24 + " dny" : d.hours + " h") + ")";
+  }
+  function fetchTimeline() {
+    var h = tlHours;
+    return getJSON("/api/timeline?hours=" + h).then(function (d) { if (h === tlHours) renderTimeline(d); })
+      .catch(function (e) { if (h === tlHours) renderTimeline({ error: e.message }); });
+  }
+  var pollTimeline = guarded(fetchTimeline);
+  Array.prototype.forEach.call(document.querySelectorAll("#tl-hours button"), function (b) {
+    b.addEventListener("click", function () {
+      tlHours = b.getAttribute("data-h");
+      Array.prototype.forEach.call(document.querySelectorAll("#tl-hours button"), function (x) {
+        x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", String(x === b));
+      });
+      fetchTimeline();
+    });
+  });
+
   // ---------------------------------------------------------------- canvas helpers
   function setupCanvas(canvas) {
     var dpr = window.devicePixelRatio || 1;
@@ -1307,10 +1373,10 @@
       items.push({ type: "view", title: v[1], sub: v[2], href: v[0], extra: v[3] });
     });
     [["panel-usage", "Claude kvóta", "graf session / týden"], ["panel-gateway", "Gateway", "stav, PID, platformy, restarty"],
-     ["panel-agents", "Agenti", "karty profilů"], ["panel-incidents", "Co teď hoří", "chyby 24 h"],
+     ["panel-agents", "Agenti", "karty profilů"], ["panel-timeline", "Časová osa", "běhy, incidenty a výpadky všech profilů za 24 h", "timeline gantt historie"], ["panel-incidents", "Co teď hoří", "chyby 24 h"],
      ["panel-github", "GitHub repa", "push, otevřené PR"], ["panel-cron", "Cron úlohy", "všechny joby"],
      ["panel-tokens", "Tokeny / náklady", "state.db, projekce měsíce"]].forEach(function (pn) {
-      items.push({ type: "panel", title: pn[1], sub: pn[2], panel: pn[0] });
+      items.push({ type: "panel", title: pn[1], sub: pn[2], panel: pn[0], extra: pn[3] || "" });
     });
     (st.agents || []).forEach(function (a) {
       items.push({ type: "agent", title: profileLabel(a.profile), sub: (a.connected === false ? L.CS.conn.disconnected + " · " : "") + L.activityLabel(a.activity) + (a.health ? " · HP " + a.health.score : ""),
@@ -1404,7 +1470,7 @@
     ["?", "tahle nápověda a nastavení (paleta, notifikace)"],
     ["Ctrl K", "příkazová paleta: skok na profil / cron job / incident / panel, akce (na Macu ⌘ K)"],
     ["/", "hledat na celém dashboardu (v detailu s vlastním hledáním: hledat v něm)"],
-    ["g a", "agenti"], ["g s", "gateway"], ["g u", "Claude kvóta"], ["g i", "co teď hoří"],
+    ["g a", "agenti"], ["g o", "časová osa"], ["g s", "gateway"], ["g u", "Claude kvóta"], ["g i", "co teď hoří"],
     ["g c", "cron úlohy"], ["g t", "tokeny / náklady"], ["g r", "GitHub repa"], ["g g", "nahoru (BMO)"],
     ["g l", "plný log incidentů"], ["g p", "srovnání profilů"],
     ["1 – 5", "okno grafu kvóty 6h / 24h / 7d / 30d / vše"],
@@ -1412,7 +1478,7 @@
     ["r", "načíst data hned (v detailu: obnovit detail)"],
     ["Esc", "zavřít detail / opustit pole"]
   ];
-  var GO = { a: "panel-agents", s: "panel-gateway", u: "panel-usage", i: "panel-incidents", c: "panel-cron", t: "panel-tokens", r: "panel-github", g: "top" };
+  var GO = { a: "panel-agents", o: "panel-timeline", s: "panel-gateway", u: "panel-usage", i: "panel-incidents", c: "panel-cron", t: "panel-tokens", r: "panel-github", g: "top" };
   var gPending = 0;
 
   function renderHelp() {
@@ -1585,7 +1651,7 @@
       getJSON("/api/forecast").then(function (f) { lastForecast = f; }, function () { lastForecast = { error: true }; })
     ]).then(function () { drawTokens(lastTokens); renderForecast(); });
   });
-  function pollAll() { pollState(); pollUsage(); pollSpark(); pollGithub(); pollTokens(); }
+  function pollAll() { pollState(); pollUsage(); pollSpark(); pollGithub(); pollTokens(); pollTimeline(); }
   document.addEventListener("visibilitychange", function () { if (!document.hidden) pollAll(); });
   $("usage-export").innerHTML = exportLinks("kind=usage&window=" + usageWindow);
   $("token-export").innerHTML = exportLinks("kind=tokens&days=14");
@@ -1604,5 +1670,6 @@
   every(POLL_USAGE_MS, pollSpark);
   every(POLL_SLOW_MS, pollGithub);
   every(POLL_SLOW_MS, pollTokens);
+  every(POLL_SLOW_MS, pollTimeline);
   setInterval(function () { tickClock(); tickUpdated(); }, 1000);
 })();

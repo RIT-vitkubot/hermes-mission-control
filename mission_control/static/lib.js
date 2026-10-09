@@ -67,6 +67,19 @@
     return segs;
   }
 
+  // Group items ({pos, …}, any order) whose positions lie within `gap` of the
+  // previous one, so markers on a narrow strip never stack on top of each
+  // other. Returns [{pos: first position, items: […]}], sorted by position.
+  function clusterByPosition(items, gap) {
+    var out = [];
+    (items || []).slice().sort(function (a, b) { return a.pos - b.pos; }).forEach(function (it) {
+      var last = out[out.length - 1];
+      if (last && it.pos - last.items[last.items.length - 1].pos <= gap) last.items.push(it);
+      else out.push({ pos: it.pos, items: [it] });
+    });
+    return out;
+  }
+
   // ---------------------------------------------------------------- notifications
   function incidentKey(i) { return [i.ts, i.profile || "", i.source || "", i.message || ""].join("|"); }
   // Critical incidents not seen before. `seen` = {keys: {}, primed: false} is
@@ -87,7 +100,7 @@
 
   var api = {
     CS: CS, label: label, activityLabel: activityLabel, tokenSeriesName: tokenSeriesName,
-    fold: fold, matchRank: matchRank, sparkPaths: sparkPaths, mergeBuckets: mergeBuckets,
+    fold: fold, matchRank: matchRank, sparkPaths: sparkPaths, mergeBuckets: mergeBuckets, clusterByPosition: clusterByPosition,
     incidentKey: incidentKey, newCriticals: newCriticals
   };
   if (typeof module === "object" && module.exports) module.exports = api;

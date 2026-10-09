@@ -60,6 +60,12 @@ test("mergeBuckets merges runs of equal state", () => {
   assert.deepStrictEqual(L.mergeBuckets([]), []);
 });
 
+test("clusterByPosition groups close markers (chained), keeps order", () => {
+  const c = L.clusterByPosition([{ pos: 10 }, { pos: 50 }, { pos: 11 }, { pos: 12.4 }, { pos: 51 }], 1.5);
+  assert.deepStrictEqual(c.map((x) => [x.pos, x.items.length]), [[10, 3], [50, 2]]);
+  assert.deepStrictEqual(L.clusterByPosition([], 1), []);
+});
+
 test("newCriticals primes silently, then reports only new criticals once", () => {
   const seen = { keys: {}, primed: false };
   const a = { ts: 1, profile: "skola", level: "critical", message: "x" };

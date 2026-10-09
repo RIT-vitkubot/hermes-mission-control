@@ -105,6 +105,18 @@
         <div class="agents" id="agents"><div class="empty loading">Načítám agenty…</div></div>
       </article>
 
+      <article class="panel glass span-3" id="panel-timeline">
+        <header class="panel-head"><h3>Časová osa <span class="muted small" id="tl-span">(24 h)</span></h3>
+          <div class="seg" id="tl-hours" role="group" aria-label="Období časové osy"><button type="button" data-h="6" aria-pressed="false">6h</button><button type="button" data-h="24" class="active" aria-pressed="true">24h</button><button type="button" data-h="72" aria-pressed="false">3d</button></div>
+        </header>
+        <div class="legend tl-legend" aria-hidden="true">
+          <span class="tl-key s-ok"></span>běh ok <span class="tl-key s-warning"></span>varování <span class="tl-key s-error"></span>chyba
+          <span class="tl-key s-critical"></span>kritické <span class="tl-key s-down"></span>gateway neběžel <span class="tl-mark-key">✕</span>neúspěšný běh (klik = detail)
+          <span class="muted small">prázdno = nic nezaznamenáno (běhy z <code>cron/output</code>, incidenty z logů)</span>
+        </div>
+        <div class="timeline" id="timeline"><div class="empty loading">Načítám časovou osu…</div></div>
+      </article>
+
       <article class="panel glass span-2" id="panel-incidents">
         <header class="panel-head"><h3>Co teď hoří <span class="muted small">(24h)</span></h3>
           <span class="head-actions"><span id="inc-export" class="hide-narrow"></span><a class="link-more" href="#/incidents">plný log ›</a><span id="inc-count" class="pill pill-unknown">0</span></span></header>
