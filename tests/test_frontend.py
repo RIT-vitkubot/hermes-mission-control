@@ -64,6 +64,25 @@ class StaticConsistencyTest(unittest.TestCase):
             if "btn-icon" in tag or "btn-ghost" in tag or "data-close" in tag:
                 self.assertIn("aria-label=", tag, tag)
 
+    def test_landmarks_and_headings(self):
+        html = read_static("index.html")
+        self.assertEqual(html.count("<h1"), 1)
+        self.assertIn('class="skip-link" href="#main"', html)
+        self.assertIn('<main id="main"', html)
+        # every panel is a labelled region pointing at its own heading
+        for m in re.finditer(r'<article class="panel[^>]*>', html):
+            tag = m.group(0)
+            pid = re.search(r'id="([^"]+)"', tag).group(1)
+            self.assertIn('aria-labelledby="%s-h"' % pid, tag)
+            self.assertIn('id="%s-h"' % pid, html)
+        # canvases are either decorative or described
+        for m in re.finditer(r"<canvas\b[^>]*>", html):
+            self.assertTrue("aria-hidden" in m.group(0) or "aria-label" in m.group(0), m.group(0))
+        # toggle groups are named
+        for m in re.finditer(r'<div class="seg"[^>]*>', html):
+            self.assertIn("aria-label=", m.group(0))
+        self.assertIn('role="status"', html)  # BMO bubble / toast are announced
+
 
 if __name__ == "__main__":
     unittest.main()

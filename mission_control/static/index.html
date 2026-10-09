@@ -22,14 +22,15 @@
   </script>
 </head>
 <body data-level="unknown">
+  <a class="skip-link" href="#main">Přeskočit na obsah</a>
   <div class="bg-grid" aria-hidden="true"></div>
 
   <header class="topbar glass">
-    <div class="brand">
-      <span class="brand-dot"></span>
-      <span class="brand-title">HERMES<span class="thin">//</span>MISSION CONTROL</span>
-      <span class="brand-short">HMC</span>
-    </div>
+    <h1 class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-title">HERMES<span class="thin" aria-hidden="true">//</span>MISSION CONTROL</span>
+      <span class="brand-short" aria-hidden="true">HMC</span>
+    </h1>
     <div class="topbar-mid">
       <span id="overall-pill" class="pill pill-unknown">…</span>
       <span class="muted small hide-narrow">jen čtení · 0 LLM tokenů</span>
@@ -37,21 +38,21 @@
     </div>
     <div class="topbar-right">
       <span id="clock" class="mono"></span>
-      <span id="conn" class="conn" title="spojení s backendem"></span>
+      <span id="conn" class="conn" title="spojení s backendem" role="img" aria-label="spojení s backendem"></span>
       <button id="search-btn" class="btn btn-sm btn-icon" type="button" title="Hledat a příkazy (/ nebo Ctrl+K)" aria-label="Hledat a příkazy"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button>
       <button id="help-btn" class="btn btn-sm btn-ghost" type="button" title="Zkratky a nastavení (?)" aria-label="Zkratky a nastavení">?</button>
       <button id="restart-btn" class="btn btn-danger" type="button" title="Restartovat Hermes gateway">⟲ <span class="btn-label-full">Restartovat gateway</span><span class="btn-label-short">Restart</span></button>
     </div>
   </header>
 
-  <main>
+  <main id="main" tabindex="-1">
     <section class="hero">
       <div id="bmo-stage" class="bmo-stage">
-        <canvas id="bmo-canvas"></canvas>
-        <div id="bubble" class="bubble">
+        <canvas id="bmo-canvas" aria-hidden="true"></canvas>
+        <div id="bubble" class="bubble" role="status" aria-live="polite" aria-label="BMO říká">
           <span id="bubble-text">Načítám…</span>
         </div>
-        <div id="bmo-fallback" class="bmo-fallback hidden">BMO</div>
+        <div id="bmo-fallback" class="bmo-fallback hidden" aria-hidden="true">BMO</div>
       </div>
       <div class="hero-side glass">
         <h2>Stav systému</h2>
@@ -69,10 +70,10 @@
     </section>
 
     <section class="grid">
-      <article class="panel glass span-2" id="panel-usage">
+      <article class="panel glass span-2" id="panel-usage" aria-labelledby="panel-usage-h">
         <header class="panel-head">
-          <h3>Claude kvóta <span class="muted small">(% vyčerpání)</span></h3>
-          <div class="seg" id="usage-windows">
+          <h3 id="panel-usage-h">Claude kvóta <span class="muted small">(% vyčerpání)</span></h3>
+          <div class="seg" id="usage-windows" role="group" aria-label="Časové okno grafu kvóty">
             <button data-w="6h">6h</button><button data-w="24h" class="active">24h</button><button data-w="7d">7d</button><button data-w="30d">30d</button><button data-w="all">vše</button>
           </div>
         </header>
@@ -83,11 +84,11 @@
           <span class="legend-end" id="usage-export"></span>
         </div>
         <div class="forecast-line small" id="usage-forecast" title="Lineární projekce z bodů od posledního resetu (session: 3 h, týden: 48 h zpět). Jen odhad."></div>
-        <div class="chart-wrap"><canvas id="usage-chart"></canvas><div id="usage-tip" class="tip hidden"></div></div>
+        <div class="chart-wrap"><canvas id="usage-chart" role="img" aria-label="Graf Claude kvóty"></canvas><div id="usage-tip" class="tip hidden"></div></div>
       </article>
 
-      <article class="panel glass" id="panel-gateway">
-        <header class="panel-head"><h3>Gateway</h3><span id="gw-badge" class="pill pill-unknown">?</span></header>
+      <article class="panel glass" id="panel-gateway" aria-labelledby="panel-gateway-h">
+        <header class="panel-head"><h3 id="panel-gateway-h">Gateway</h3><span id="gw-badge" class="pill pill-unknown">?</span></header>
         <dl class="kv" id="gw-kv"><dt class="loading">Načítám…</dt><dd></dd></dl>
         <div class="table-wrap"><table class="matrix" id="gw-matrix"></table></div>
         <details class="restarts" id="gw-restarts-box" data-key="restarts">
@@ -97,16 +98,16 @@
         </details>
       </article>
 
-      <article class="panel glass span-3" id="panel-agents">
-        <header class="panel-head"><h3>Agenti</h3>
+      <article class="panel glass span-3" id="panel-agents" aria-labelledby="panel-agents-h">
+        <header class="panel-head"><h3 id="panel-agents-h">Agenti</h3>
           <span class="head-actions"><a class="link-more" href="#/compare" title="Profily vedle sebe (g p)">srovnat profily ›</a>
           <span class="muted small" title="Odhad podle child procesů gateway PID (rekurzivně), ne přesný počet sub-agentů. Na hostu neexistuje zdroj pravdy pro živé sub-agenty.">procesy = odhad ⓘ</span></span>
         </header>
         <div class="agents" id="agents"><div class="empty loading">Načítám agenty…</div></div>
       </article>
 
-      <article class="panel glass span-3" id="panel-timeline">
-        <header class="panel-head"><h3>Časová osa <span class="muted small" id="tl-span">(24 h)</span></h3>
+      <article class="panel glass span-3" id="panel-timeline" aria-labelledby="panel-timeline-h">
+        <header class="panel-head"><h3 id="panel-timeline-h">Časová osa <span class="muted small" id="tl-span">(24 h)</span></h3>
           <div class="seg" id="tl-hours" role="group" aria-label="Období časové osy"><button type="button" data-h="6" aria-pressed="false">6h</button><button type="button" data-h="24" class="active" aria-pressed="true">24h</button><button type="button" data-h="72" aria-pressed="false">3d</button></div>
         </header>
         <div class="legend tl-legend" aria-hidden="true">
@@ -117,31 +118,31 @@
         <div class="timeline" id="timeline"><div class="empty loading">Načítám časovou osu…</div></div>
       </article>
 
-      <article class="panel glass span-2" id="panel-incidents">
-        <header class="panel-head"><h3>Co teď hoří <span class="muted small">(24h)</span></h3>
+      <article class="panel glass span-2" id="panel-incidents" aria-labelledby="panel-incidents-h">
+        <header class="panel-head"><h3 id="panel-incidents-h">Co teď hoří <span class="muted small">(24h)</span></h3>
           <span class="head-actions"><span id="inc-export" class="hide-narrow"></span><a class="link-more" href="#/incidents">plný log ›</a><span id="inc-count" class="pill pill-unknown">0</span></span></header>
         <ul class="incidents" id="incidents"><li class="empty loading">Načítám…</li></ul>
       </article>
 
-      <article class="panel glass" id="panel-github">
-        <header class="panel-head"><h3>GitHub repa</h3><span class="muted small" id="gh-meta"></span></header>
+      <article class="panel glass" id="panel-github" aria-labelledby="panel-github-h">
+        <header class="panel-head"><h3 id="panel-github-h">GitHub repa</h3><span class="muted small" id="gh-meta"></span></header>
         <ul class="repos" id="repos"><li class="empty loading">Načítám…</li></ul>
       </article>
 
-      <article class="panel glass span-3" id="panel-cron">
-        <header class="panel-head"><h3>Cron úlohy</h3><span class="muted small" id="cron-meta"></span></header>
+      <article class="panel glass span-3" id="panel-cron" aria-labelledby="panel-cron-h">
+        <header class="panel-head"><h3 id="panel-cron-h">Cron úlohy</h3><span class="muted small" id="cron-meta"></span></header>
         <div class="cron" id="cron"><div class="empty loading">Načítám cron joby…</div></div>
       </article>
 
-      <article class="panel glass span-3" id="panel-tokens">
+      <article class="panel glass span-3" id="panel-tokens" aria-labelledby="panel-tokens-h">
         <header class="panel-head">
-          <h3>Tokeny / náklady podle profilu <span class="muted small">(state.db, 14 dní)</span></h3>
-          <div class="seg" id="token-mode"><button data-m="tokens" class="active">tokeny</button><button data-m="cost">$</button></div>
+          <h3 id="panel-tokens-h">Tokeny / náklady podle profilu <span class="muted small">(state.db, 14 dní)</span></h3>
+          <div class="seg" id="token-mode" role="group" aria-label="Jednotka grafu"><button data-m="tokens" class="active">tokeny</button><button data-m="cost">$</button></div>
         </header>
         <div class="forecast" id="forecast"></div>
         <div class="legend" id="token-legend"></div>
         <div class="panel-foot" id="token-export"></div>
-        <div class="chart-wrap short"><canvas id="token-chart"></canvas><div id="token-tip" class="tip hidden"></div></div>
+        <div class="chart-wrap short"><canvas id="token-chart" role="img" aria-label="Graf tokenů podle profilu"></canvas><div id="token-tip" class="tip hidden"></div></div>
       </article>
     </section>
   </main>
@@ -149,7 +150,7 @@
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-box glass">
-      <header class="modal-head">
+      <div class="modal-head">
         <div class="modal-titles">
           <div class="modal-crumb muted small" id="modal-crumb"></div>
           <h2 id="modal-title">Detail</h2>
@@ -159,8 +160,8 @@
           <button class="btn btn-sm" type="button" id="modal-refresh" title="Znovu načíst data">⟳</button>
           <button class="btn btn-sm" type="button" data-close aria-label="Zavřít (Esc)" title="Zavřít (Esc)">✕</button>
         </div>
-      </header>
-      <div class="modal-body" id="modal-body"></div>
+      </div>
+      <div class="modal-body" id="modal-body" tabindex="-1"></div>
     </div>
   </div>
 

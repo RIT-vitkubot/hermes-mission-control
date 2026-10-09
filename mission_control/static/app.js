@@ -103,7 +103,10 @@
   function platformTitle(p) {
     return (p.stale ? "gateway neběží — poslední známý stav: " : "") + p.state + (p.error ? " — " + p.error : "");
   }
-  function setConn(ok) { $("conn").className = "conn " + (ok ? "ok" : "err"); }
+  function setConn(ok) {
+    $("conn").className = "conn " + (ok ? "ok" : "err");
+    $("conn").setAttribute("aria-label", ok ? "spojení s backendem OK" : "spojení s backendem ztraceno");
+  }
 
   // Polling re-renders panels every few seconds. Replacing innerHTML blindly
   // collapsed opened <details>, reset scroll positions and made the UI blink,
@@ -191,7 +194,7 @@
       platformNames.forEach(function (n) {
         var p = plats.filter(function (x) { return x.profile === prof && x.platform === n; })[0];
         if (!p) { html += '<td><span class="muted">·</span></td>'; return; }
-        html += '<td title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span></td>';
+        html += '<td title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '" role="img" aria-label="' + esc(n + ": " + platformTitle(p)) + '"></span></td>';
       });
       html += "</tr>";
     });
@@ -209,7 +212,7 @@
       var lastRun = c.last_run_at ? rel(c.last_run_at, now) + (c.last_job ? " · " + c.last_job.name + " (" + stLabel(c.last_job.status) + ")" : "") : "–";
       var nextRun = c.next_run_at ? rel(c.next_run_at, now) + (c.next_job ? " · " + c.next_job.name : "") : "–";
       var platforms = a.platforms.map(function (p) {
-        return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '"></span> ' + esc(p.platform) + "</span>";
+        return '<span title="' + esc(platformTitle(p)) + '"><span class="cell ' + esc(platformCell(p)) + '" role="img" aria-label="' + esc(platformTitle(p)) + '"></span> ' + esc(p.platform) + "</span>";
       }).join(" &nbsp;");
       return '<div class="agent ' + cls + (a.busy ? " busy" : "") + '">' +
         '<div class="agent-head"><a class="agent-name" href="' + agentHref(a.profile) + '" style="color:' + (PROFILE_COLORS[a.profile] || "inherit") + '">' + esc(a.label) + "</a>" +
@@ -514,7 +517,7 @@
           (runs.length > 1 ? "<sub>" + runs.length + "</sub>" : "") + "</a>";
       }).join("");
       return '<div class="tl-row"><a class="tl-label" href="' + agentHref(p.profile) + '" style="color:' + (PROFILE_COLORS[p.profile] || "inherit") + '" title="' + esc(sum) + '">' + esc(p.profile === "default" ? "BMO" : p.profile) + "</a>" +
-        '<div class="tl-track" role="img" aria-label="' + esc(profileLabel(p.profile) + ", posledních " + d.hours + " h: " + sum) + '">' + down + track + "</div>" +
+        '<div class="tl-track" role="group" aria-label="' + esc(profileLabel(p.profile) + ", posledních " + d.hours + " h: " + sum) + '">' + down + track + "</div>" +
         '<span class="tl-stat muted small">' + p.runs + " běhů" + (p.failed.length ? ' · <span class="streak">' + p.failed.length + "✕</span>" : "") + "</span></div>";
     }).join("");
     setHTML($("timeline"), rows + '<div class="tl-row tl-axis" aria-hidden="true"><span></span><div class="tl-ticks">' + tlTicks(d) + "</div><span></span></div>");
@@ -613,6 +616,9 @@
     line("week_pct", css("--magenta"));
     line("session_pct", css("--cyan"));
     usageGeom = { X: X, Y: Y, pts: pts, pad: pad, ph: ph };
+    var lastPt = pts[pts.length - 1];
+    $("usage-chart").setAttribute("aria-label", "Graf Claude kvóty, okno " + data.window + ", " + pts.length + " vzorků. Poslední " + fmtDateTime(lastPt.ts) +
+      ": session " + (lastPt.session_pct == null ? "–" : Math.round(lastPt.session_pct) + " %") + ", týden " + (lastPt.week_pct == null ? "–" : Math.round(lastPt.week_pct) + " %") + ".");
 
     if (hoverX != null) {
       var best = null;
@@ -760,6 +766,8 @@
       }
     });
     tokenGeom = { pad: pad, bw: bw, days: days, stacks: stacks };
+    $("token-chart").setAttribute("aria-label", (tokenMode === "cost" ? "Náklady" : "Tokeny") + " podle profilu za " + days.length + " dní: " +
+      avail.map(function (p) { var v = dayValue(p.totals); return p.profile + " " + (tokenMode === "cost" ? "$" + v.toFixed(2) : fmtNum(v)); }).join(", ") + ".");
     if (hoverX != null) {
       var di = Math.floor((hoverX - pad.l) / bw);
       if (di >= 0 && di < days.length) {
@@ -787,6 +795,22 @@
       drawTokens(lastTokens); renderForecast();
     });
   });
+
+  // Toggle buttons (.seg) everywhere, including detail views rendered later:
+  // aria-pressed mirrors the .active class, so state is not colour-only.
+  function syncPressed(root) {
+    Array.prototype.forEach.call((root.querySelectorAll ? root : document).querySelectorAll(".seg button"), function (b) {
+      if (!b.getAttribute("type")) b.setAttribute("type", "button");
+      b.setAttribute("aria-pressed", String(b.classList.contains("active")));
+    });
+  }
+  syncPressed(document);
+  new MutationObserver(function (muts) {
+    muts.forEach(function (m) {
+      if (m.type === "attributes") { if (m.target.matches && m.target.matches(".seg button")) m.target.setAttribute("aria-pressed", String(m.target.classList.contains("active"))); }
+      else if (m.addedNodes.length && m.target.querySelectorAll) syncPressed(m.target);
+    });
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] });
 
   // ---------------------------------------------------------------- polling
   // At most one request per endpoint in flight (a slow backend must not pile
@@ -861,12 +885,21 @@
     return "#/incidents" + (q.length ? "?" + q.join("&") : "");
   }
 
+  // Everything behind the dialog is inert (no focus, no screen reader
+  // browsing); the Tab trap below stays as a fallback for older browsers.
+  function setBackgroundInert(on) {
+    Array.prototype.forEach.call(document.querySelectorAll("body > header, body > main, body > footer, body > .skip-link"), function (el) {
+      if (on) el.setAttribute("inert", ""); else el.removeAttribute("inert");
+      if (on) el.setAttribute("aria-hidden", "true"); else el.removeAttribute("aria-hidden");
+    });
+  }
   function openModal() {
     if (modal.open) return;
     modal.open = true;
     modal.lastFocus = document.activeElement;
     $("modal").classList.remove("hidden");
     document.body.classList.add("modal-open");
+    setBackgroundInert(true);
     var close = document.querySelector("#modal .modal-head [data-close]");
     if (close) close.focus();
   }
@@ -875,6 +908,7 @@
     modal.open = false; modal.route = null; modal.chart = null;
     $("modal").classList.add("hidden");
     document.body.classList.remove("modal-open");
+    setBackgroundInert(false);
     $("modal-body").innerHTML = "";
     if (modal.lastFocus && modal.lastFocus.focus) modal.lastFocus.focus();
   }
@@ -1044,7 +1078,7 @@
       var procs = ((st.processes && st.processes.list) || []).filter(function (x) { return x.profile === r.profile; });
       var conn = connPill(a);
       var html = '<div class="detail-grid">' +
-        '<section class="detail-card"><h4>Stav</h4><dl class="kv">' +
+        '<section class="detail-card"><h3>Stav</h3><dl class="kv">' +
         "<dt>spojení</dt><dd>" + conn + "</dd>" +
         "<dt>teď</dt><dd>" + (a.busy ? "⚡ " : "💤 ") + esc(L.activityLabel(a.activity)) + "</dd>" +
         "<dt>platformy</dt><dd>" + (a.platforms.length ? a.platforms.map(function (p) {
@@ -1059,24 +1093,24 @@
           return "<tr><td class=\"mono\">" + esc(x.pid) + "</td><td>" + esc(fmtDur(x.elapsed)) + '</td><td class="mono cmd">' + esc(x.cmd) + "</td></tr>";
         }).join("") + "</table></div>" : "") +
         "</section>" +
-        '<section class="detail-card"><h4>Cron joby <span class="muted small">(' + cron.jobs.length + ")</span></h4>" +
+        '<section class="detail-card"><h3>Cron joby <span class="muted small">(' + cron.jobs.length + ")</span></h3>" +
         (cron.available === false ? '<div class="empty">jobs.json nenalezen</div>' : cron.jobs.length ? '<ul class="job-list">' + cron.jobs.map(function (j) {
           return '<li><a href="' + jobHref(r.profile, j) + '">' + esc(j.name) + "</a> " + statusPill(j.status) +
             '<span class="muted small">' + esc(j.schedule || "") + " · poslední " + esc(rel(j.last_run_at, st.now)) + (j.failure_streak ? ' · <span class="streak">' + j.failure_streak + "×</span>" : "") + "</span>" + sparkHTML(j.recent) + "</li>";
         }).join("") + "</ul>" : '<div class="empty">žádné joby</div>') +
         "</section></div>" +
-        '<section class="detail-card"><div class="panel-head"><h4>Tokeny / náklady <span class="muted small">(state.db, 30 dní)</span></h4>' +
+        '<section class="detail-card"><div class="panel-head"><h3>Tokeny / náklady <span class="muted small">(state.db, 30 dní)</span></h3>' +
         '<div class="seg" id="d-token-mode"><button data-m="tokens" class="active">tokeny</button><button data-m="cost">$</button></div></div>' +
         '<div class="legend" id="d-token-legend"></div>' +
         '<div class="chart-wrap short"><canvas id="d-token-chart"></canvas><div id="d-token-tip" class="tip hidden"></div></div></section>' +
-        '<section class="detail-card"><div class="panel-head"><h4>Incidenty <span class="muted small">(7 dní)</span></h4>' +
+        '<section class="detail-card"><div class="panel-head"><h3>Incidenty <span class="muted small">(7 dní)</span></h3>' +
         '<a class="link-more" href="' + incidentsHash({ profile: r.profile, hours: "168" }) + '">filtrovat ›</a></div>' +
         '<ul class="incidents" id="d-incidents"><li class="empty loading">Načítám…</li></ul></section>' +
-        '<section class="detail-card"><div class="panel-head"><h4>agent.log</h4><div class="filters">' +
+        '<section class="detail-card"><div class="panel-head"><h3>agent.log</h3><div class="filters">' +
         '<select id="d-log-lines" aria-label="počet řádků"><option value="100">100 řádků</option><option value="300" selected>300 řádků</option><option value="1000">1000 řádků</option></select>' +
         '<select id="d-log-level" aria-label="závažnost"><option value="">vše</option><option value="warning">varování+</option><option value="error">chyba+</option></select>' +
         '<input id="d-log-q" type="search" placeholder="hledat…" aria-label="hledat v logu"></div></div>' +
-        '<pre class="log-view" id="d-log"><span class="muted">Načítám…</span></pre><div class="muted small" id="d-log-meta"></div></section>';
+        '<pre class="log-view" id="d-log" tabindex="0" aria-label="agent.log"><span class="muted">Načítám…</span></pre><div class="muted small" id="d-log-meta"></div></section>';
       $("modal-body").innerHTML = html;
 
       // tokens
@@ -1149,7 +1183,7 @@
         return '<span class="run-dot ' + esc(x.status) + '" title="' + esc(fmtDateTime(x.ts) + " · " + stLabel(x.status)) + '"></span>';
       }).join("");
       var html = '<div class="detail-grid">' +
-        '<section class="detail-card"><h4>Job</h4><dl class="kv">' +
+        '<section class="detail-card"><h3>Job</h3><dl class="kv">' +
         "<dt>stav</dt><dd>" + statusPill(j.status) + (j.enabled ? "" : ' <span class="muted">(vypnutý)</span>') + "</dd>" +
         "<dt>id</dt><dd class=\"mono\">" + esc(j.id || "–") + "</dd>" +
         "<dt>rozvrh</dt><dd class=\"mono\">" + esc(j.schedule || "–") + "</dd>" +
@@ -1158,7 +1192,7 @@
         "<dt>chyb v řadě</dt><dd>" + (j.failure_streak ? '<span class="streak">' + j.failure_streak + "×</span>" : "0") + "</dd>" +
         (j.last_error ? '<dt>poslední chyba</dt><dd class="repo-err-full">' + esc(j.last_error) + "</dd>" : "") +
         "</dl></section>" +
-        '<section class="detail-card"><h4>Statistika <span class="muted small">(posledních ' + d.count + " běhů)</span></h4>" +
+        '<section class="detail-card"><h3>Statistika <span class="muted small">(posledních ' + d.count + " běhů)</span></h3>" +
         '<div class="kpis kpis-3">' +
         '<div class="kpi"><div class="kpi-label">úspěšnost</div><div class="kpi-value">' + (d.success_rate == null ? "–" : Math.round(d.success_rate * 100) + " %") + "</div></div>" +
         '<div class="kpi"><div class="kpi-label">selhání</div><div class="kpi-value"' + (d.failed ? ' style="color:var(--err)"' : "") + ">" + d.failed + "</div></div>" +
@@ -1167,7 +1201,7 @@
         '<div class="muted small">zdroj: ' + esc(d.source || "žádná historie") +
         (d.source === "cron/jobs.json" ? " — adresář cron/output pro tento job neexistuje, známe jen poslední běh" : " — stav běhu odhadnut z obsahu výstupu") + "</div>" +
         "</section></div>" +
-        '<section class="detail-card"><div class="panel-head"><h4>Historie běhů</h4><div class="seg" id="d-run-filter">' +
+        '<section class="detail-card"><div class="panel-head"><h3>Historie běhů</h3><div class="seg" id="d-run-filter">' +
         '<button data-f="" class="active">vše</button><button data-f="error">jen chyby</button></div></div>' +
         '<ul class="runs" id="d-runs"></ul></section>';
       $("modal-body").innerHTML = html;
@@ -1257,7 +1291,7 @@
   // worst: "max" = highest value is the notable one, "min" = lowest is.
   var COMPARE_COLS = [
     ["health", "HP", function (v, r) { return healthBadge({ score: v, level: r.health_level, factors: [] }); }, "min"],
-    ["connected", "spojení", function (v) { return v === true ? '<span class="cell ok"></span>' : v === false ? '<span class="cell error"></span>' : '<span class="cell unknown"></span>'; }, null],
+    ["connected", "spojení", function (v) { return '<span class="cell ' + (v === true ? "ok" : v === false ? "error" : "unknown") + '" role="img" aria-label="' + (v === true ? L.CS.conn.connected : v === false ? L.CS.conn.disconnected : L.CS.conn.na) + '"></span>'; }, null],
     ["errors_24h", "chyby 24h", function (v, r) { return String(v + r.critical_24h) + (r.critical_24h ? ' <span class="muted">(' + r.critical_24h + " krit.)</span>" : ""); }, "max", function (r) { return r.errors_24h + r.critical_24h; }],
     ["warnings_24h", "varování 24h", String, "max"],
     ["jobs_failing", "joby v chybě", function (v, r) { return v + ' <span class="muted">/ ' + r.jobs_total + "</span>"; }, "max"],
@@ -1314,7 +1348,7 @@
         });
         $("d-compare").innerHTML = "<thead><tr><th>profil</th>" + COMPARE_COLS.map(function (c) {
           var on = c[0] === sortKey;
-          return '<th><button type="button" class="sort' + (on ? " on" : "") + '" data-k="' + c[0] + '" aria-sort="' + (on ? (dir > 0 ? "ascending" : "descending") : "none") + '">' +
+          return '<th aria-sort="' + (on ? (dir > 0 ? "ascending" : "descending") : "none") + '"><button type="button" class="sort' + (on ? " on" : "") + '" data-k="' + c[0] + '">' +
             esc(c[1]) + (on ? (dir > 0 ? " ▲" : " ▼") : "") + "</button></th>";
         }).join("") + "</tr></thead><tbody>" + rows.map(function (row) {
           return '<tr><th scope="row"><a href="' + agentHref(row.profile) + '" style="color:' + (PROFILE_COLORS[row.profile] || "inherit") + '">' + esc(profileLabel(row.profile)) + "</a></th>" +
@@ -1419,7 +1453,8 @@
   function renderSearch(r) {
     setModalHead(crumbHome(), "Hledání a příkazy");
     $("modal-body").innerHTML = '<div class="filters filters-bar"><input id="d-search-q" type="search" placeholder="agent, cron job, repo, chyba, panel…" aria-label="hledat na dashboardu" autocomplete="off" value="' + esc(r.q || "") + '"></div>' +
-      '<ul class="search-results" id="d-search-list" role="listbox"></ul>';
+      '<div class="sr-only" id="d-search-status" role="status" aria-live="polite"></div>' +
+      '<ul class="search-results" id="d-search-list" aria-label="výsledky"></ul>';
     var sel = 0, results = [];
     var draw = function () {
       var q = $("d-search-q").value;
@@ -1429,11 +1464,12 @@
       $("d-search-list").innerHTML = (empty ? '<li class="sr-hint muted small">Agenti, cron joby, repa, dnešní incidenty, panely i akce. <kbd>↑</kbd> <kbd>↓</kbd> výběr, <kbd>Enter</kbd> otevřít.</li>' : "") +
         (results.length ? results.map(function (it, i) {
           var href = it.href || it.url || "#";
-          return '<li role="option" aria-selected="' + (i === sel) + '" class="' + (i === sel ? "sel " : "") + esc(it.level || "") + '"><a href="' + esc(href) + '" data-i="' + i + '"' + (it.url ? ' target="_blank" rel="noopener"' : "") + ">" +
+          return '<li class="' + (i === sel ? "sel " : "") + esc(it.level || "") + '"><a href="' + esc(href) + '" data-i="' + i + '"' + (i === sel ? ' aria-current="true"' : "") + (it.url ? ' target="_blank" rel="noopener"' : "") + ">" +
             '<span class="sr-type">' + esc(SEARCH_TYPES[it.type]) + '</span><span class="sr-title"' + (it.color ? ' style="color:' + it.color + '"' : "") + ">" + esc(it.title) + "</span>" +
             '<span class="sr-sub muted small">' + esc(it.sub) + "</span></a></li>";
         }).join("") + (empty ? "" : '<li class="sr-more"><a href="' + incidentsHash({ hours: "168", q: q }) + '">hledat „' + esc(q) + '“ v plném logu incidentů (7 dní) ›</a></li>')
         : '<li class="empty">Nic nenalezeno. <a href="' + incidentsHash({ hours: "168", q: q }) + '">Zkusit plný log incidentů (7 dní) ›</a></li>');
+      $("d-search-status").textContent = empty ? "" : results.length ? results.length + " výsledků" : "nic nenalezeno";
       history.replaceState(null, "", "#/search" + (q ? "?q=" + encodeURIComponent(q) : ""));
     };
     var open = function (it) {
@@ -1486,7 +1522,7 @@
     $("modal-body").innerHTML = '<table class="keys">' + SHORTCUTS.map(function (k) {
       return "<tr><td>" + k[0].split(" ").map(function (x) { return x === "–" ? "–" : "<kbd>" + esc(x) + "</kbd>"; }).join(" ") + "</td><td>" + esc(k[1]) + "</td></tr>";
     }).join("") + "</table>" +
-      '<h4 class="help-h">Zobrazení</h4><div class="palette-row"><span>barevná paleta stavů</span><div class="seg" id="d-palette" role="group" aria-label="paleta">' +
+      '<h3 class="help-h">Zobrazení</h3><div class="palette-row"><span>barevná paleta stavů</span><div class="seg" id="d-palette" role="group" aria-label="paleta">' +
       [["default", "neonová"], ["cb", "pro barvoslepé"]].map(function (o) {
         return '<button type="button" data-p="' + o[0] + '"' + (getPalette() === o[0] ? ' class="active" aria-pressed="true"' : ' aria-pressed="false"') + ">" + o[1] + "</button>";
       }).join("") + '</div></div><p class="muted small">Pro barvoslepé: OK = modrá, varování = žlutá, chyba = oranžová a chybové tečky jsou kosočtverce. Uloží se jen v tomhle prohlížeči.</p>' +
