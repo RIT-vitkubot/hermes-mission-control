@@ -11,7 +11,13 @@ import subprocess
 import threading
 import time
 from collections import deque
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
+
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:  # pragma: no cover - Python < 3.9
+    ZoneInfo = None
+    ZoneInfoNotFoundError = Exception
 
 from . import PROFILES
 from . import parsing
@@ -137,10 +143,35 @@ def run_cmd(args, timeout=20):
             proc.stderr.decode("utf-8", "replace"))
 
 
-def host_tz():
-    now = datetime.now().astimezone()
-    off = now.utcoffset()
-    return {"name": now.tzname(), "offset_seconds": int(off.total_seconds()) if off else 0}
+# The operator lives in Europe/Prague while the production host clock runs on
+# Etc/UTC, so display times must not follow the system TZ. Override with
+# ``--tz`` or env ``MC_TZ``.
+DEFAULT_TZ = "Europe/Prague"
+_display_tz_name = os.environ.get("MC_TZ") or DEFAULT_TZ
+
+
+def set_display_tz(name):
+    """Set the IANA zone used for display times and day buckets."""
+    global _display_tz_name
+    _display_tz_name = name or DEFAULT_TZ
+
+
+def display_tz():
+    """tzinfo for the configured zone (system local only if zoneinfo is unusable)."""
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(_display_tz_name)
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+def host_tz(now=None):
+    """Name and UTC offset of the display zone at ``now`` (epoch seconds)."""
+    dt = datetime.fromtimestamp(time.time() if now is None else now, display_tz())
+    off = dt.utcoffset()
+    return {"name": dt.tzname(), "zone": _display_tz_name,
+            "offset_seconds": int(off.total_seconds()) if off else 0}
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +538,7 @@ class Collector(object):
                 except sqlite3.Error as exc:
                     entry["error"] = str(exc)
             profiles.append(entry)
-        today = datetime.now().date()
+        today = datetime.now(display_tz()).date()
         day_keys = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
         return {"days": days, "day_keys": day_keys, "profiles": profiles, "tz": host_tz()}
 
@@ -516,9 +547,9 @@ class Collector(object):
         return self.cache.get("forecast", 300, self._forecast)
 
     def _forecast(self):
-        today = date.today()
+        today = datetime.now(display_tz()).date()
         prev_start = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
-        since = time.mktime(prev_start.timetuple())
+        since = datetime(prev_start.year, prev_start.month, prev_start.day, tzinfo=display_tz()).timestamp()
         profiles, total_cost, total_tokens = [], {}, {}
         for p in self.cfg.profiles:
             path = os.path.join(self.cfg.profile_home(p), "state.db")
@@ -726,7 +757,7 @@ def read_token_usage(path, since):
             ts = parsing.parse_ts(row[0])
             if ts is None or ts < since:
                 continue
-            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            day = datetime.fromtimestamp(ts, display_tz()).strftime("%Y-%m-%d")
             bucket = days.setdefault(day, {})
             for name, value in zip(token_cols + cost_cols, row[1:]):
                 try:
